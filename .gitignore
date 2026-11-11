@@ -1,0 +1,25 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Your personal data: never commit these
+# - Gemini API key
+secrets.toml
+# - your settings & characters (created from stickai/defaults on first run)
+characters.toml
+characters.tmp
+# - chat history, long-term memory, pictures you sent
+memory/
+
+# Editors / OS
+.vscode/
+.idea/
+.claude/
+Thumbs.db
+desktop.ini
+*.lnk

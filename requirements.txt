@@ -1,0 +1,3 @@
+PySide6>=6.7
+comtypes>=1.4      # Windows UI Automation (widgets inside windows)
+numpy>=2.0           # fast local target detection for click games

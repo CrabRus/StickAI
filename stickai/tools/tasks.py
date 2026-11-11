@@ -14,6 +14,17 @@ their own banter, and never more than one at a time):
   set_clipboard    put a result (translation, fix...) on the clipboard      (instant)
   remind / cancel_reminders   local timers, see reminders.py                 (instant)
 
+Building blocks for anything else (mixed freely in one plan):
+  open_url         open a web address, or search the web for words, in the default browser
+  press_keys       keyboard shortcuts in a window: "ctrl+t", "ctrl+l", "enter", "alt+left"...
+  type_text        also into whatever is focused in a window (no field id), optionally + Enter
+  click_at         click something they SEE in the last screenshot (x / y fractions)
+  wait             pause (pages loading)
+
+A reply can carry a PLAN: up to MAX_STEPS steps, run in order with ONE
+Allow / Deny for all of them. When it ends, the results go back to the
+director, which may let them see the outcome and continue (a few rounds).
+
 Each task is a little script (a generator) stepped by Qt timers, so the
 animation and the app keep running while it plays. Grabbing the mouse
 while the cursor is gliding aborts the task.
@@ -28,6 +39,8 @@ import threading
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer
+from urllib.parse import quote_plus, urlparse
+
 from PySide6.QtGui import QGuiApplication
 from ..ui.dialogs import StickDialog, ask_async
 
@@ -35,6 +48,8 @@ from ..anim.mathutil import smoothstep
 from ..anim.stickman import State
 from ..desktop import win32
 from . import aim, control, uia
+from .. import skills
+from ..skills import Unusable
 from .files import Workspace, WorkspaceError
 from ..i18n import tr
 
@@ -44,11 +59,18 @@ if TYPE_CHECKING:
 log = logging.getLogger("stickai.tasks")
 
 # "...without asking" for windows covers these:
-WINDOW_KINDS = ("close_window", "minimize_window", "restore_window", "arrange_windows", "scroll_page", "launch_app")
+WINDOW_KINDS = ("close_window", "minimize_window", "restore_window", "arrange_windows", "scroll_page", "launch_app",
+                "open_url")
+FLEX_KINDS = ("open_url", "press_keys", "click_at", "wait")
 FILE_KINDS = ("create_folder", "write_file", "open_path")
 INSTANT_KINDS = ("set_clipboard", "remind", "cancel_reminders")  # harmless, done at once, never block
 ASKS_IN_SCRIPT = ("check_field",)  # reads first, then asks with the actual fixes
-KINDS = WINDOW_KINDS + ("type_text", "click_game", "click_button") + ASKS_IN_SCRIPT + FILE_KINDS + INSTANT_KINDS
+KINDS = WINDOW_KINDS + ("type_text", "click_game", "click_button") + ASKS_IN_SCRIPT + FILE_KINDS + INSTANT_KINDS \
+    + FLEX_KINDS
+MAX_STEPS = 6
+# after these the screen is different: they get one look at the result, to finish the job or fix it
+LOOK_AFTER = ("open_url", "launch_app", "press_keys", "type_text", "click_button", "click_at", "scroll_page",
+              "restore_window")
 MAX_CLIPBOARD = 20000
 MAX_TYPOS_SHOWN = 12
 MAX_TEXT = 300
@@ -72,45 +94,160 @@ class TaskRunner(QObject):
         self.game_running = False
         self._answer = False  # result of the last ("ask", ...) step
         self._chat_aside = False  # the chat was hidden because it covered the task's target
+        self._result: tuple[str, str] | None = None  # ("ok" | "failed" | "denied", detail) of the step that ran
+        self._after = None  # (key, results, round, want_continue) once a plan finishes
+        self._cancel = False
 
     # ------------------------------------------------------------ proposal
     def propose(self, key: str, task: dict, targets: dict) -> None:
+        """One task (older replies / tests): a plan of one step."""
+        self.propose_plan(key, [task], targets)
+
+    def _trusted(self, spec: dict) -> bool:
+        if "trusted" in spec:  # skills decide per step (e.g. terminal: reading yes, git push no)
+            return bool(spec["trusted"])
+        s, kind = self.app.roster.settings, spec["kind"]
+        return (kind in INSTANT_KINDS or kind in ASKS_IN_SCRIPT or kind == "wait"
+                or (s.trust_windows and kind in WINDOW_KINDS) or (s.trust_files and kind in FILE_KINDS))
+
+    def propose_plan(self, key: str, steps: list, targets: dict, round_: int = 0,
+                     want_continue: bool = False) -> None:
+        """Steps from one reply: resolve them all, ask ONCE (unless every step is trusted), run in order."""
         name = self.app.director.name(key)
-        if str(task.get("kind", "")) in INSTANT_KINDS:
-            spec = self._resolve(task, targets)
-            if spec is not None:
-                self._instant(key, spec)
-            return
         if self.busy or self._box is not None:
             self.app.director.note_event(tr("task.busy", name=name))
             return
-        spec = self._resolve(task, targets)
-        if spec is None:
-            log.info("ignored unusable task from %s: %s", key, task)
+        specs, bad = [], []
+        for t in steps[:MAX_STEPS]:
+            try:
+                spec = self._resolve(t, targets) if isinstance(t, dict) else None
+            except Unusable as e:  # a skill said exactly what's wrong
+                log.info("unusable step from %s: %s (%s)", key, t, e)
+                bad.append((f"{t.get('kind')} step", str(e)))
+                continue
+            if spec is None:
+                log.info("unusable step from %s: %s", key, t)
+                bad.append(self._why_unusable(t, targets))
+            else:
+                specs.append(spec)
+        if bad:  # all or nothing: half a plan can mean something else (a lone "space" pauses the music)
+            specs = []
+        if not specs:
+            if bad and round_ <= 1:  # tell them exactly what was wrong, so they can fix it
+                self.app.director.after_plan(key, [(b[0], ("failed", b[1])) for b in bad]
+                                             + [("the other steps of that plan", ("not run", "fix the plan and "
+                                                                                 "send it again"))], round_, True)
+            elif bad:  # a stray extra step late in the chain: not worth a warning in the chat
+                log.info("ignored late unusable steps from %s: %s", key, bad)
             return
-        what = spec["what"]
-        settings = self.app.roster.settings
-        trusted = (settings.trust_windows and spec["kind"] in WINDOW_KINDS) or \
-                  (settings.trust_files and spec["kind"] in FILE_KINDS) or spec["kind"] in ASKS_IN_SCRIPT
-        if trusted:  # you switched "without asking" on for this kind of task
-            self._start(key, spec)
+        if len(specs) == 1 and specs[0]["kind"] in INSTANT_KINDS:
+            self._instant(key, specs[0])
+            return
+        if all(self._trusted(sp) for sp in specs):
+            self._start_plan(key, specs, round_, want_continue)
             return
         if self.app.hidden:
             self.app.toggle_hidden()
         self.app.chat.show()
+        if len(specs) == 1:
+            what = specs[0]["what"]
+            text = tr("perm.question", name=name, what=what)
+        else:
+            what = "; ".join(sp["what"] for sp in specs)
+            text = tr("perm.plan", name=name, steps="\n".join(f"{i}. {sp['what']}" for i, sp in enumerate(specs, 1)))
 
         def decided(ok: bool) -> None:  # Enter = Allow (highlighted); Esc / ✕ = Deny
             self._box = None
             if not ok:
                 self.app.director.note_event(tr("task.denied", name=name, what=what))
                 return
-            self._start(key, spec)
+            self._start_plan(key, specs, round_, want_continue)
 
-        self._box = ask_async(self.app.chat, tr("perm.title"), tr("perm.question", name=name, what=what),
-                              tr("perm.allow"), tr("perm.deny"), decided)
+        self._box = ask_async(self.app.chat, tr("perm.title"), text, tr("perm.allow"), tr("perm.deny"), decided)
+
+    def _why_unusable(self, t, targets: dict) -> tuple[str, str]:
+        """(what it was, why it can't run) in words the model can act on."""
+        if not isinstance(t, dict):
+            return "a step", "it wasn't an object with a kind"
+        kind = str(t.get("kind", ""))
+        wins = targets.get("windows", {})
+        w = t.get("window")
+        if kind not in KINDS:
+            return f"step {kind!r}", "unknown kind"
+        if kind == "click_button" and isinstance(t.get("button"), (int, float)):
+            n = len(targets.get("buttons") or [])
+            return "click_button step", (f"there is no B{int(t['button'])}: use B1..B{n}" if n else
+                                         "no buttons list yet: add \"continue\": true after opening it")
+        if kind == "click_button" and not (t.get("label") or t.get("text")):
+            return "click_button step", "missing button: the B number from the buttons list"
+        if w is not None and (not isinstance(w, (int, float)) or int(w) not in wins):
+            return f"{kind} step", f"window {str(w)[:12]} is not in the window list: use one of {sorted(wins)}"
+        if kind == "click_button" and w is None:
+            return "click_button step", "missing window id (or use button = a B number)"
+        if kind == "press_keys" and not (t.get("keys") or t.get("text")):
+            return "press_keys step", 'missing keys, e.g. "ctrl+t"'
+        if kind == "press_keys":
+            return "press_keys step", "keys not understood (use names like ctrl+t, enter, space, alt+left)"
+        if kind == "type_text" and not t.get("text"):
+            return "type_text step", "missing text"
+        if kind == "open_url" and not (t.get("url") or t.get("text")):
+            return "open_url step", "missing url"
+        if kind == "launch_app":
+            return f"launch_app {t.get('app')!r}", "no installed app with that name (or opening apps is off)"
+        if kind == "click_at":
+            return "click_at step", "needs at_x / at_y (0..1) on a screenshot from this turn"
+        if kind in ("type_text", "check_field") and t.get("field") is not None:
+            return f"{kind} step", "field id is not in the list"
+        return f"{kind} step", "not allowed in the settings, or details missing"
+
+    def cancel(self) -> None:
+        """'stop' in the chat: end a game and the rest of a plan."""
+        self._cancel = True
+        self.game_running = False
+
+    def _start_plan(self, key: str, specs: list, round_: int, want_continue: bool) -> None:
+        self.busy, self._cancel = True, False
+        self._gen = self._plan(key, specs, round_, want_continue)
+        self._step()
+
+    def _plan(self, key: str, specs: list, round_: int, want_continue: bool):
+        results = []
+        for i, spec in enumerate(specs):
+            if self._cancel:
+                results += [(sp["what"], ("not run", "the user said stop")) for sp in specs[i:]]
+                break
+            if spec["kind"] in INSTANT_KINDS:
+                self._instant(key, spec)
+                results.append((spec["what"] or spec["kind"], ("ok", "")))
+                continue
+            if spec["kind"] == "wait":
+                yield ("wait", spec["seconds"])
+                results.append((spec["what"], ("ok", "")))
+                continue
+            self._result = None
+            yield from self._script(key, spec)
+            r = self._result or ("ok", "")
+            if r[0] == "ok" and spec.get("report"):
+                r = ("ok", spec["report"])  # e.g. the terminal output, where a file was found
+            results.append((spec.get("done", spec["what"]), r))
+            if r[0] != "ok":
+                results += [(sp["what"], ("not run", "an earlier step failed")) for sp in specs[i + 1:]]
+                break
+            yield ("wait", 0.35)  # let the app react before the next step
+        ran = [sp["kind"] for sp, (_w, r) in zip(specs, results) if r[0] == "ok"]
+        # an automatic look only early on; later rounds go on only when they ask (no endless "one more click")
+        followup = any(sp.get("followup") for sp in specs)  # e.g. git status: they should tell you what it says
+        self._after = (key, results, round_, want_continue or followup
+                       or (round_ == 0 and any(k in LOOK_AFTER for k in ran)))
 
     def _resolve(self, task: dict, targets: dict) -> dict | None:
+        """A step -> a runnable spec, or None. Skill steps raise Unusable(reason) instead."""
         kind = str(task.get("kind", ""))
+        sk = skills.owner(kind)
+        if sk is not None:
+            if not sk.enabled(self.app.roster.settings):
+                raise Unusable("that is switched off in the settings")
+            return sk.resolve(self, task, targets)
         if kind not in KINDS:
             return None
         settings = self.app.roster.settings
@@ -133,10 +270,14 @@ class TaskRunner(QObject):
             else:
                 what = tr("task.open", path=shown)
             return {"kind": kind, "path": path, "content": str(task.get("content", "")), "what": what}
-        if kind in INSTANT_KINDS or kind == "launch_app":
+        if kind == "launch_app":
+            return self._resolve_app(task, targets)
+        if kind in INSTANT_KINDS:
             return self._resolve_other(kind, task)
         if not settings.control:
             return None
+        if kind in FLEX_KINDS:
+            return self._resolve_flex(kind, task, targets)
         if kind in ("click_button", "scroll_page", "arrange_windows", "check_field"):
             return self._resolve_window_tool(kind, task, targets)
         if kind == "click_game":
@@ -154,13 +295,21 @@ class TaskRunner(QObject):
         if kind == "type_text":
             fid = task.get("field")
             field = targets.get("fields", {}).get(int(fid)) if isinstance(fid, (int, float)) else None
-            text = " ".join(str(task.get("text", "")).split())[:MAX_TEXT]  # one line, no Enter
-            if field is None or not text:
+            text = " ".join(str(task.get("text", "")).split())[:MAX_TEXT]  # one line; Enter only if asked
+            enter = bool(task.get("enter"))
+            if not text:
                 return None
+            if field is None:  # no field id: type into whatever is focused in that window
+                hwnd = self._window_or_top(task.get("window"), targets)
+                if hwnd is None:
+                    return None
+                title = self._title(hwnd, targets)
+                return {"kind": kind, "hwnd": hwnd, "rel": None, "text": text, "enter": enter,
+                        "what": tr("task.type_window", title=title, text=text) + (" ⏎" if enter else "")}
             hwnd, rel, fname = field
             title = targets.get("titles", {}).get(targets.get("window_of", {}).get(hwnd), "") or ""
-            return {"kind": kind, "hwnd": hwnd, "rel": rel, "text": text,
-                    "what": tr("task.type", field=fname or "…", title=title[:50], text=text)}
+            return {"kind": kind, "hwnd": hwnd, "rel": rel, "text": text, "enter": enter,
+                    "what": tr("task.type", field=fname or "…", title=title[:50], text=text) + (" ⏎" if enter else "")}
         wid = task.get("window")
         hwnd = targets.get("windows", {}).get(int(wid)) if isinstance(wid, (int, float)) else None
         if hwnd is None:
@@ -168,6 +317,62 @@ class TaskRunner(QObject):
         title = targets.get("titles", {}).get(int(wid), "")[:60]
         key = {"close_window": "task.close", "minimize_window": "task.minimize", "restore_window": "task.restore"}[kind]
         return {"kind": kind, "hwnd": hwnd, "what": tr(key, title=title)}
+
+    def _window_or_top(self, wid, targets: dict) -> int | None:
+        """The window with that id, or (no id) the topmost window that isn't ours."""
+        if isinstance(wid, (int, float)):
+            return targets.get("windows", {}).get(int(wid))
+        return self.app.scene.windows[0].hwnd if self.app.scene.windows else None
+
+    def _title(self, hwnd: int, targets: dict) -> str:
+        i = targets.get("window_of", {}).get(hwnd)
+        if i is not None:
+            return targets.get("titles", {}).get(i, "")[:50]
+        w = self.app.scene.window(hwnd)
+        return (w.title if w is not None else "")[:50]
+
+    def _resolve_flex(self, kind: str, task: dict, targets: dict) -> dict | None:
+        if kind == "wait":
+            sec = task.get("seconds")
+            sec = min(max(float(sec), 0.3), 10.0) if isinstance(sec, (int, float)) else 1.5
+            return {"kind": kind, "seconds": sec, "what": tr("task.wait", s=f"{sec:g}")}
+        if kind == "open_url":
+            raw = str(task.get("url") or task.get("text") or "").strip()
+            if not raw:
+                return None
+            if raw.startswith(("http://", "https://")):
+                url = raw
+            elif " " not in raw and "." in raw and not raw.startswith((".", "/")):
+                url = "https://" + raw  # "youtube.com"
+            else:
+                url = "https://www.google.com/search?q=" + quote_plus(raw)  # just words: a web search
+            if urlparse(url).scheme not in ("http", "https") or not urlparse(url).netloc:
+                return None
+            new = bool(task.get("new_window"))
+            shown = url if len(url) < 70 else url[:67] + "…"
+            return {"kind": kind, "url": url, "new_window": new,
+                    "what": tr("task.url_window" if new else "task.url", url=shown)}
+        if kind == "press_keys":
+            keys = str(task.get("keys") or task.get("text") or "")
+            combos = control.parse_keys(keys)
+            hwnd = self._window_or_top(task.get("window"), targets)
+            if combos is None or hwnd is None:
+                return None
+            shown = ", ".join("+".join(c) for c in combos)
+            return {"kind": kind, "hwnd": hwnd, "combos": combos,
+                    "what": tr("task.keys", keys=shown, title=self._title(hwnd, targets))}
+        # click_at: something they saw in the screenshot of this turn
+        b = self.app.last_capture_bounds
+        fx, fy = task.get("at_x"), task.get("at_y")
+        if b is None or not all(isinstance(v, (int, float)) for v in (fx, fy)) or not (0 <= fx <= 1 and 0 <= fy <= 1):
+            return None
+        x, y = b.left + fx * b.width, b.top + fy * b.height
+        root = control.root_at(x, y)
+        if not root or control.window_pid(root) == os.getpid():
+            return None
+        label = " ".join(str(task.get("text", "")).split())[:60] or "…"
+        return {"kind": kind, "hwnd": root, "x": x, "y": y,
+                "what": tr("task.click_at", thing=label, title=self._title(root, targets))}
 
     def _resolve_other(self, kind: str, task: dict) -> dict | None:
         """Clipboard, reminders and the app launcher (each has its own setting)."""
@@ -184,11 +389,27 @@ class TaskRunner(QObject):
             if kind == "remind" and not (isinstance(seconds, (int, float)) and text):
                 return None
             return {"kind": kind, "text": text, "seconds": float(seconds or 0), "what": ""}
-        # launch_app: only names from your allow-list, matched loosely ("spotify" -> "Spotify")
-        want = str(task.get("app", "") or text).strip().lower()
+        return None
+
+    def _resolve_app(self, task: dict, targets: dict) -> dict | None:
+        """ "Spotify": already open (even minimized)? bring that window back. Else your own list
+        in Settings, else the Start menu (if allowed)."""
+        settings = self.app.roster.settings
+        want = " ".join(str(task.get("app") or task.get("text") or "").split()).lower()
+        if not want:
+            return None
+        if settings.control:
+            for i, hwnd in targets.get("windows", {}).items():
+                if control.app_name(hwnd).lower() == want:
+                    title = targets.get("titles", {}).get(i, "")[:60]
+                    return {"kind": "restore_window", "hwnd": hwnd, "what": tr("task.restore", title=title)}
         for name, path in settings.apps:
-            if want and (want == name.lower() or want in name.lower()):
-                return {"kind": kind, "app": name, "path": path, "what": tr("task.launch", app=name)}
+            if want == name.lower() or want in name.lower():
+                return {"kind": "launch_app", "app": name, "path": path, "what": tr("task.launch", app=name)}
+        if settings.control and settings.start_apps:
+            hit = self.app.start_apps.find(want)
+            if hit is not None:
+                return {"kind": "launch_app", "app": hit[0], "appid": hit[1], "what": tr("task.launch", app=hit[0])}
         return None
 
     def _resolve_window_tool(self, kind: str, task: dict, targets: dict) -> dict | None:
@@ -226,14 +447,22 @@ class TaskRunner(QObject):
             return {"kind": kind, "hwnd": hwnd, "rel": rel, "field": fname or "…",
                     "what": tr("task.spell", field=fname or "…")}
         hwnd = window(task.get("window"))
+        if hwnd is None and kind == "click_button" and targets.get("observed"):
+            hwnd = targets["observed"]  # the window whose buttons they were just shown
         if hwnd is None:
             return None
-        title = titles.get(int(task["window"]), "")[:50]
+        title = self._title(hwnd, targets)
         if kind == "click_button":
-            button = " ".join(str(task.get("text", "")).split())[:60]
+            b, shown = task.get("button"), targets.get("buttons") or []
+            picked = shown[int(b) - 1] if isinstance(b, (int, float)) and 1 <= int(b) <= len(shown) else ""
+            seen_at = None  # where that button was when they were shown the list
+            win_then, rects = targets.get("button_rects") or (None, [])
+            if picked and int(b) <= len(rects) and win_then is not None:
+                seen_at = (win_then, rects[int(b) - 1])
+            button = " ".join(str(picked or task.get("label") or task.get("text") or "").split())[:60]
             if not button:
                 return None
-            return {"kind": kind, "hwnd": hwnd, "button": button, "title": title,
+            return {"kind": kind, "hwnd": hwnd, "button": button, "title": title, "seen_at": seen_at,
                     "what": tr("task.click", button=button, title=title)}
         # scroll_page
         direction = "up" if str(task.get("direction", "down")).lower() == "up" else "down"
@@ -295,10 +524,20 @@ class TaskRunner(QObject):
         try:
             cmd = next(self._gen)
         except StopIteration:
-            self._gen = None
-            self.busy = False
-            self._chat_back()
+            self._finish()
             return
+        self._dispatch(cmd)
+
+    def _finish(self) -> None:
+        self._gen = None
+        self.busy = False
+        self._chat_back()
+        if self._after is not None:  # a plan ended: report back so they can carry on
+            key, results, round_, want = self._after
+            self._after = None
+            QTimer.singleShot(0, lambda: self.app.director.after_plan(key, results, round_, want))
+
+    def _dispatch(self, cmd) -> None:
         if cmd[0] == "wait":
             QTimer.singleShot(int(cmd[1] * 1000), self._step)
         elif cmd[0] == "until":
@@ -355,14 +594,15 @@ class TaskRunner(QObject):
             self._step()
 
     def _fail(self, why: str) -> None:
-        if self._gen is not None:
-            try:
-                self._gen.throw(TaskFailed(why))
-            except (StopIteration, TaskFailed):
-                pass
-        self._gen = None
-        self.busy = False
-        self._chat_back()
+        """Interrupt the running step (e.g. you moved the mouse); the plan records it and ends."""
+        if self._gen is None:
+            return
+        try:
+            cmd = self._gen.throw(TaskFailed(why))
+        except (StopIteration, TaskFailed):
+            self._finish()
+            return
+        self._dispatch(cmd)
 
     def _aside(self, x: float, y: float) -> bool:
         """If one of OUR windows (the always-on-top chat...) covers (x, y), step it aside for
@@ -392,7 +632,11 @@ class TaskRunner(QObject):
                 raise TaskFailed(tr("task.why_gone"))
             kind = spec["kind"]
 
-            if kind == "restore_window":
+            if spec.get("skill"):
+                yield from skills.owner(kind).run(self, s, spec)
+                what = spec.get("done", what)
+
+            elif kind == "restore_window":
                 s.wave(1.5)
                 yield ("wait", 0.6)
                 control.restore_window(hwnd)
@@ -428,15 +672,62 @@ class TaskRunner(QObject):
 
             elif kind == "click_game":
                 yield from self._game(s, spec)
+                self._result = ("ok", "")
                 return
+
+            elif kind == "open_url":
+                s.jump()
+                yield ("wait", 0.3)
+                try:
+                    if not (spec["new_window"] and control.open_in_new_window(spec["url"])):
+                        os.startfile(spec["url"])  # default browser; a new tab in the open window
+                except OSError as e:
+                    raise TaskFailed(str(e))
+                yield ("wait", 1.2)
+
+            elif kind == "press_keys":
+                control.restore_window(hwnd)
+                yield ("wait", 0.3)
+                if control.foreground_root() != hwnd:
+                    raise TaskFailed(tr("task.why_focus"))
+                s.gesture, s.gesture_until = "type", s.time + 0.4 * len(spec["combos"]) + 0.6
+                for combo in spec["combos"]:
+                    if control.foreground_root() != hwnd:  # you switched away: stop
+                        raise TaskFailed(tr("task.why_focus"))
+                    control.press_combo(combo)
+                    yield ("wait", 0.35)
+                s.gesture = ""
+
+            elif kind == "click_at":
+                x, y = spec["x"], spec["y"]
+                control.restore_window(hwnd)
+                yield ("wait", 0.3)
+                rect = win32.query_live_rect(hwnd)
+                if rect is not None:
+                    plat = app.scene.platform_under(x, rect.top, hwnd, window_tolerance=3)
+                    if plat is not None and not plat.widget and s.leap_to(plat, min(max(x, plat.x0 + 4), plat.x1 - 4)):
+                        yield ("until", lambda: s.state not in (State.JUMP_PREP, State.HOP), 6.0)
+                if self._aside(x, y):
+                    yield ("wait", 0.15)
+                s.gesture, s.gesture_until, s.point_at = "point", s.time + 1.2, (x, y)
+                yield ("glide", x, y, 0.6)
+                if control.root_at(x, y) != hwnd:
+                    raise TaskFailed(tr("task.why_covered"))
+                s.jump()
+                yield ("wait", 0.25)
+                control.click()
 
             elif kind == "launch_app":
                 s.jump()
                 yield ("wait", 0.35)
                 try:
-                    os.startfile(os.path.expandvars(spec["path"]))
+                    if spec.get("appid"):
+                        self.app.start_apps.launch(spec["appid"])
+                    else:
+                        os.startfile(os.path.expandvars(spec["path"]))
                 except OSError as e:
                     raise TaskFailed(str(e))
+                yield ("wait", 2.5)  # apps take a moment to show their window
 
             elif kind == "arrange_windows":
                 s.wave(1.2)
@@ -461,9 +752,25 @@ class TaskRunner(QObject):
             elif kind == "click_button":
                 control.restore_window(hwnd)
                 yield ("wait", 0.3)
-                box = self._background(lambda: uia.find_clickables(hwnd, spec["button"]))
-                yield ("until", lambda: box.get("done", False), 6.0)
-                hits = box.get("value") or []
+                hits = []
+                for attempt in range(3):  # apps still drawing after a search / page load: look again
+                    if control.foreground_root() != hwnd:
+                        # Chromium apps (Spotify, Discord, browsers) only report their buttons while in front
+                        control.restore_window(hwnd)
+                        yield ("wait", 0.5)
+                    box = self._background(lambda: uia.find_clickables(hwnd, spec["button"]))
+                    yield ("until", lambda: box.get("done", False), 8.0)
+                    hits = box.get("value") or []
+                    if hits:
+                        break
+                    yield ("wait", 0.8)
+                if not hits and spec.get("seen_at"):
+                    # some apps (Chromium-based: Spotify...) stop reporting their buttons now and then: use where
+                    # it was a moment ago, moved along with the window
+                    (then, (l0, t0, r0, b0)), now = spec["seen_at"], win32.query_live_rect(hwnd)
+                    if now is not None:
+                        dx, dy = now.left - then.left, now.top - then.top
+                        hits = [(l0 + dx, t0 + dy, r0 + dx, b0 + dy, spec["button"])]
                 if not hits:
                     raise TaskFailed(tr("task.why_no_button", button=spec["button"]))
                 left, top, right, bottom, label = hits[0]
@@ -510,10 +817,7 @@ class TaskRunner(QObject):
                     control.scroll(step)
                     yield ("wait", 0.04)
                 yield ("wait", 0.6)  # let the page settle before anyone looks at it
-                if spec["read"]:
-                    app.director.note_event(tr("task.done", name=name, what=what))
-                    app.director.read_after_scroll(key)
-                    return
+                # (with "read", the plan's follow-up round includes a fresh screenshot)
 
             elif kind == "check_field":
                 rect = win32.query_live_rect(hwnd)
@@ -558,6 +862,7 @@ class TaskRunner(QObject):
                            f"{name} " + tr("spell.found", n=len(fixes), field=spec["field"], list=shown),
                            tr("spell.fix"))
                     if not self._answer:
+                        self._result = ("denied", "the user said no")
                         app.director.note_event(tr("task.denied", name=name, what=what))
                         return
                     fixed = WORD.sub(lambda m: fixes.get(m.group(), m.group()), text)
@@ -569,6 +874,22 @@ class TaskRunner(QObject):
                         raise TaskFailed(tr("spell.why_write"))
                     s.jump()
                     what = tr("spell.fixed", n=len(fixes), field=spec["field"])
+
+            elif kind == "type_text" and spec["rel"] is None:  # whatever has focus in that window
+                control.restore_window(hwnd)
+                yield ("wait", 0.3)
+                if control.foreground_root() != hwnd:
+                    raise TaskFailed(tr("task.why_focus"))
+                s.gesture, s.gesture_until = "type", s.time + 0.05 * len(spec["text"]) + 1.0
+                for ch in spec["text"]:
+                    if control.foreground_root() != hwnd:
+                        raise TaskFailed(tr("task.why_focus"))
+                    control.type_char(ch)
+                    yield ("wait", 0.045)
+                if spec["enter"]:
+                    yield ("wait", 0.15)
+                    control.press_combo(["enter"])
+                s.gesture = ""
 
             elif kind == "type_text":
                 rect = win32.query_live_rect(hwnd)
@@ -597,11 +918,16 @@ class TaskRunner(QObject):
                         raise TaskFailed(tr("task.why_focus"))
                     control.type_char(ch)
                     yield ("wait", 0.045)
+                if spec.get("enter"):
+                    yield ("wait", 0.15)
+                    control.press_combo(["enter"])
                 s.gesture = ""
+            self._result = ("ok", "")
             app.director.note_event(tr("task.done", name=name, what=what))
         except TaskFailed as e:
             if s is not None:
                 s.gesture = ""
+            self._result = ("failed", str(e))
             app.director.note_event(tr("task.failed", name=name, what=what, why=str(e)))
 
     def _game(self, s, spec):

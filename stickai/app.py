@@ -22,6 +22,7 @@ from .brain.characters import Roster, load_roster
 from .brain.director import Director
 from .tools.tasks import TaskRunner
 from .tools.reminders import ReminderBook
+from .tools.startapps import StartApps
 from .desktop import win32
 from .desktop.scene import DesktopScene
 from .desktop.win32 import Rect
@@ -88,6 +89,7 @@ class StickApp:
         self.overlays: list[OverlayWindow] = []
         self.hud_overlay: OverlayWindow | None = None
         self.dragging = None  # Stickman being held by the mouse
+        self.last_capture_bounds = None  # monitor shown in the last screenshot
         self._fps = 0.0
         self._last = time.perf_counter()
         self._ticks = 0
@@ -117,6 +119,7 @@ class StickApp:
         self.director = Director(self, self.characters_path.parent / "secrets.toml", self.memory)
         self.tasks = TaskRunner(self)
         self.reminders = ReminderBook(self, self.characters_path.parent / "memory" / "reminders.json")
+        self.start_apps = StartApps()  # the Start menu's apps, read in the background
         self.music = MusicShow(self)
         self.couch = Couch(self)
         self.chat = ChatWindow(self)
@@ -558,6 +561,9 @@ class StickApp:
         cx, cy = win32.cursor_pos()
         scr = next((q for q in QGuiApplication.screens() if o_contains(self, q, cx, cy)), None) \
             or QGuiApplication.primaryScreen()
+        # remember which monitor (physical px) the picture shows: "click at 40%, 60% of it" maps back here
+        o = next((o for o in self.overlays if o.qscreen is scr and o.monitor is not None), None)
+        self.last_capture_bounds = o.monitor.bounds if o is not None else None
         return scr.grabWindow(0).toImage()
 
     def grab_rect(self, rect):

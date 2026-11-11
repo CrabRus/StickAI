@@ -77,6 +77,46 @@ def find_clickables(hwnd: int, name: str, limit: int = 300) -> list[tuple[int, i
         return []
 
 
+def list_clickables(hwnd: int, limit: int = 60, prefer: str = "", rects: list | None = None) -> list[str]:
+    """Labels of the visible buttons / links / tabs in a window (top to bottom), so they can
+    plan the next click without a screenshot. Only names, never other text of the window."""
+    try:
+        UIA, auto = _auto()
+        ct = UIA.UIA_ControlTypePropertyId
+        pc = auto.CreatePropertyCondition
+        cond = pc(ct, UIA.UIA_ButtonControlTypeId)
+        for t in (UIA.UIA_HyperlinkControlTypeId, UIA.UIA_TabItemControlTypeId, UIA.UIA_MenuItemControlTypeId):
+            cond = auto.CreateOrCondition(cond, pc(ct, t))
+        cache = auto.CreateCacheRequest()
+        for prop in (UIA.UIA_BoundingRectanglePropertyId, UIA.UIA_IsOffscreenPropertyId, UIA.UIA_NamePropertyId):
+            cache.AddProperty(prop)
+        arr = auto.ElementFromHandle(hwnd).FindAllBuildCache(UIA.TreeScope_Descendants, cond, cache)
+        found, seen = [], set()
+        for i in range(min(arr.Length, 600)):
+            try:
+                e = arr.GetElement(i)
+                if e.CachedIsOffscreen:
+                    continue
+                label = " ".join((e.CachedName or "").split())[:50]
+                r = e.CachedBoundingRectangle
+            except Exception:
+                continue
+            if label and label.lower() not in seen and r.right > r.left:
+                seen.add(label.lower())
+                found.append((r.top, r.left, label, (r.left, r.top, r.right, r.bottom)))
+        found.sort()  # top to bottom, left to right
+        words = {w for w in _norm(prefer).split() if len(w) > 2}
+        if words:  # labels that mention what the user asked for come first
+            hit = lambda f: -sum(w in f[2].lower() for w in words)  # noqa: E731
+            found.sort(key=hit)
+        if rects is not None:  # where each one was (screen px), as a fallback for clicking it later
+            rects[:] = [f[3] for f in found[:limit]]
+        return [f[2] for f in found[:limit]]
+    except Exception as e:
+        log.info("list_clickables failed: %s", e)
+        return []
+
+
 def _value_element(x: int, y: int):
     UIA, auto = _auto()
     from ctypes import wintypes

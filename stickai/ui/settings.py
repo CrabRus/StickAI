@@ -230,6 +230,9 @@ class SettingsDialog(QDialog):
         self.control = QCheckBox(tr("set.control"))
         self.trust = QCheckBox(tr("set.trust"))
         self.read_fields = QCheckBox(tr("set.read_fields"))
+        self.start_apps = QCheckBox(tr("set.start_apps"))
+        self.start_apps.setStyleSheet("margin-left: 22px;")
+        self.control.toggled.connect(self.start_apps.setEnabled)
         self.read_fields.setStyleSheet("margin-left: 22px;")
         self.control.toggled.connect(self.read_fields.setEnabled)
         self.clipboard = QCheckBox(tr("set.clipboard"))
@@ -258,7 +261,7 @@ class SettingsDialog(QDialog):
         self.on_top = QCheckBox(tr("set.on_top"))
         self.spellcheck = QCheckBox(tr("set.spellcheck"))
         self.titles = QCheckBox(tr("set.titles"))
-        for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.read_fields,
+        for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.start_apps, self.read_fields,
                    self.clipboard, self.reminders, self.files, self.trust_files):
             form.addRow("", cb)
         form.addRow(tr("set.files_folder"), self._folder_row)
@@ -324,7 +327,8 @@ class SettingsDialog(QDialog):
         for w in (self.lang, self.bubbles, self.vision):
             w.currentIndexChanged.connect(self._dirty)
         for w in (self.banter, self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
-                  self.trust_files, self.on_top, self.spellcheck, self.titles, self.read_fields, self.clipboard,
+                  self.trust_files, self.on_top, self.spellcheck, self.titles, self.read_fields, self.start_apps,
+                  self.clipboard,
                   self.reminders):
             w.toggled.connect(self._dirty)
         for w in (self.b_lo, self.b_hi):
@@ -499,6 +503,8 @@ class SettingsDialog(QDialog):
         self.trust.setEnabled(s.control)
         self.read_fields.setChecked(s.read_fields)
         self.read_fields.setEnabled(s.control)
+        self.start_apps.setChecked(s.start_apps)
+        self.start_apps.setEnabled(s.control)
         self.clipboard.setChecked(s.clipboard)
         self.reminders.setChecked(s.reminders)
         self.apps.setPlainText("\n".join(f"{n} = {p}" for n, p in s.apps))
@@ -674,6 +680,7 @@ class SettingsDialog(QDialog):
             language=self.lang.currentData(), bubbles=self.bubbles.currentData(), banter=self.banter.isChecked(),
             banter_every=(max(30.0, lo), max(30.0, hi)), react_to_throws=self.react.isChecked(),
             greet_on_arrival=self.greet.isChecked(), read_fields=self.read_fields.isChecked(),
+            start_apps=self.start_apps.isChecked(),
             clipboard=self.clipboard.isChecked(), reminders=self.reminders.isChecked(), apps=self._apps_list(),
             chat_on_top=self.on_top.isChecked(), spellcheck=self.spellcheck.isChecked(), widgets=self.widgets.isChecked(), web_surfaces=self.web.isChecked(),
             vision=self.vision.currentData(), control=self.control.isChecked(), trust_windows=self.trust.isChecked(),

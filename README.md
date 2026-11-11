@@ -162,10 +162,18 @@ stickai/
     director.py            summoning, chat / banter / react / summary requests -> bubbles, actions, tasks
     memory.py              chat_log.jsonl + memory.json + images/
 
-  tools/                   WHAT THEY DO FOR YOU (each behind Allow / Deny)
+  skills/                  WHAT THEY CAN DO, by area (quick commands + AI actions + checks)
+    base.py                Skill / Action / Unusable, helpers
+    system.py              media keys, close / force-close / hide / show apps by name
+    explorer.py            find files and folders (search index + walk), open folders
+    filemanager.py         move / copy / delete (Recycle Bin) / list files by type, name, date; undo
+    terminal.py            their own terminal window: folders and Git, with the rules above
+
+  tools/                   THE MACHINERY BEHIND THEM (each action behind Allow / Deny)
     tasks.py               TaskRunner: proposes, asks, then animates and runs a task
     uia.py                 UI Automation: buttons by name, reading / writing one text field
     reminders.py           local timers and reminders, saved in memory/reminders.json
+    startapps.py           the Start menu's apps (Get-StartApps), matched by name and started
     control.py             windows (close / minimize / restore / snap), cursor, wheel, typing
     files.py               sandboxed folder: create / write / open text files, backups
     aim.py                 local target detector for click / aim games
@@ -302,6 +310,46 @@ Settings → General → **Let them close / open windows and type for you**. It'
 - **You can take over:** move the mouse while the cursor is gliding and the task stops ("you moved the mouse"). Typing also stops if you switch to another window.
 - **Logging:** results are logged in the chat (✅ / 🚫 / ⚠️).
 
+## Skills and quick commands
+
+What they can do is organised in **skills** ([stickai/skills/](stickai/skills/)), one per area. Each skill has:
+- **quick commands**, understood on your PC with **no AI request** at all (instant, and they cost no quota; the character just says "On it!");
+- **actions** the AI can use, described with examples (small models follow examples much better than rules);
+- code that **runs the action and checks the result**, so the chat only says ✅ when it really happened.
+
+| skill | quick commands (EN / RU / SK) | what the AI can ask for |
+|---|---|---|
+| **System** | "pause", "next track", "louder", "mute", "close Telegram", "kill calculator" (Russian: «убей калькулятор»), "hide Chrome", "show Spotify", "open Steam" | `media` (global media keys: any player, no window needed), `close_app` (all windows of an app; `force` kills it and asks first), `hide_app`, `show_app` |
+| **Explorer** | "open downloads", "find folder StickAI", "where is my file main.py" | `find_path` (Windows Search index first, then a quick walk of your folders and drives; shows the item in Explorer, opens documents if asked but never programs), `open_folder` |
+| **Files** | "undo" / «отмени» (puts the last move or copy back) | `manage_files`: **move / copy / delete / list** your files in a folder, filtered by type ("pdf", "jpg,png" or categories: images, documents, video, audio, archives), part of the name, and date (today, yesterday, this week, last 7 days, this month…), or "only the N newest"; destination may be a new subfolder ("documents/PDF"). "Move all today's PDFs from Downloads to Documents" is one step. The Allow dialog lists the files; delete goes to the **Recycle Bin** only; nothing is overwritten (`a (1).pdf`); max 500 files at once; `undo_files` |
+| **Terminal** | (none: the AI picks the command) | `terminal`: their **own** "StickAI terminal" window (never yours), `cd` by folder name, `dir`, `git status / log / diff / branch / show / fetch` at once; `git pull / checkout / switch / add / commit / push / stash`, `mkdir` only after Allow; forced/destructive options, chaining, pipes and everything else are refused. The output is read back so they can tell you what it says |
+
+Apps are understood by their everyday names in any of the three languages ("телеграм", "хром", "проводник", "калькулятор"), and Store apps (Calculator, Settings…) are handled properly: force-closing one never touches the shared host the other Store apps run in.
+
+**Action mode.** A message that asks them to *do* something goes to the smarter model first (Flash) at a low temperature; their personality stays in the prompt. If Flash is overloaded, the next model is used straight away instead of waiting.
+
+## Plans: several steps, one approval, and they check their work
+
+A reply can carry a **plan** of up to 6 steps, run in order after **one** Allow / Deny that lists them all. Besides the specific tools below, these building blocks make them flexible:
+
+| step | does |
+|---|---|
+| `open_url` | opens an address, or **searches the web** for plain words ("google about cats" → a Google search). `new_window` opens it in a new browser window |
+| `press_keys` | keyboard shortcuts in a window: `ctrl+t`, `ctrl+n`, `ctrl+l`, `alt+left`, `f5`, `enter`, `ctrl+l, enter`… (Ctrl+Alt+Del, Win+R and Win+L are never pressed) |
+| `type_text` | into a found field **or** wherever the cursor is in a window, optionally followed by **Enter** |
+| `click_at` | clicks something they **see** in the screenshot of that turn (needs *Seeing your screen*) |
+| `wait` | a pause, e.g. for a page to load |
+
+**They check their work.** When a step fails, or when they ask to see the result (`continue`), the results go back to them, with a fresh screenshot if *Seeing your screen* is on, and they can fix it, try another way, or do the next part. That's up to 4 rounds per message. It stops the moment you write again, say **stop**, move the mouse, or press Deny. They're told never to claim they did something before the results say so.
+
+**They see what they can click.** After their first plan they automatically get one look at the result: the numbered labels of the buttons, links and tabs in the window in front (names only, the ones matching your words first), plus a screenshot if *Seeing your screen* is on. So "open the settings in that app" becomes: open it → see `B4: Settings` → `click_button` B4. Where a button was is remembered too, because Chromium-based apps (Discord, Chrome…) sometimes stop reporting their buttons for a moment.
+
+**Plans are all or nothing.** If one step is unusable (a missing button number, an unknown window), none of the plan runs, and they're told exactly what to fix. Half a plan can mean something else: a lone "space" pauses your music.
+
+**Pick the smarter brain for chores.** The free *Flash-Lite* model gets the step format wrong now and then (in testing, about one try in three needed a second round or failed). *Free & smarter* (Flash) plans multi-step tasks much more reliably.
+
+**They know which app is which.** The window list they get says `Chrome: "page title"`, `File Explorer: "…"`, because a browser's title is just the page and doesn't say it's Chrome.
+
 ## More tools
 
 All of these come only from replies to *your* message, one at a time, and show up in the chat as ✅ / 🚫 / ⚠️.
@@ -311,7 +359,7 @@ All of these come only from replies to *your* message, one at a time, and show u
 | "press **Save**", "click **Next**" | finds the button / link / tab by its name with UI Automation, hops onto the window, glides there and clicks | *Let them close / open windows…* | always |
 | "scroll down", "scroll down and tell me what's there" | scrolls the page; with *Seeing your screen* on, looks again and summarises what's visible | same | unless *without asking* |
 | "Chrome on the left, VS Code on the right" | snaps windows to halves, quarters, thirds, centre or full screen, on any monitor | same | unless *without asking* |
-| "open Spotify" | opens a program **only from your list** (*Apps they may open*; *Add app…* starts in the Start menu) | a non-empty list | unless *without asking* |
+| "open Spotify", "open Calculator" | if it's already open (even minimized) brings it back; otherwise starts it **from your Start menu** by name, desktop programs and Store apps alike (*…open apps from my Start menu*, on by default). *Apps they may open* adds your own programs or files on top | *Let them close / open windows…* | unless *without asking* |
 | "check the spelling in that field" | reads that one field, checks it **on this PC** with the Windows spell checker (the text never goes to Google), shows the fixes and asks before replacing the text. Password fields are never read | *…check spelling in their text fields* | always, with the list of fixes |
 | "translate / fix / shorten what I copied" | your clipboard text is sent with *that* message only (and logged: 📋), the result goes back onto the clipboard | *Read and replace what I copied* (off by default) | no |
 | "remind me in 20 minutes to stretch", "at 15:30…", "cancel the reminders" | a local timer: no more Gemini requests. When it's due, that character drops in with a full bubble and a Windows notification. Saved in `memory/reminders.json`, so it survives a restart (a missed one fires on start, marked as missed) | *Timers and reminders* (on by default) | no |

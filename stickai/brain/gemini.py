@@ -206,7 +206,8 @@ class GeminiClient(QObject):
         usable = [m for m in models if self._skip_until.get((key, m), 0) <= now]
         if not usable and not last:
             return GeminiResult(rid, error="err.quota", tag=tag)  # this key is resting: go straight to the backup
-        for model in usable or list(models):
+        models_left = usable or list(models)
+        for model in models_left:
             for attempt in range(OVERLOAD_RETRIES + 1):
                 try:
                     try:
@@ -221,7 +222,8 @@ class GeminiClient(QObject):
                 except GeminiError as e:
                     log.warning("Gemini %s attempt %d: %s", model, attempt + 1, e)
                     friendly = _friendly(e)
-                    if e.status in OVERLOADED and attempt < OVERLOAD_RETRIES:
+                    # overloaded: retry the same model only if it's the last one left, else move on at once
+                    if e.status in OVERLOADED and attempt < OVERLOAD_RETRIES and model == models_left[-1]:
                         time.sleep(1.5 * (attempt + 1))  # usually a short spike
                         continue
                     if e.status in (403, 404) or (e.status == 429 and "quota" in str(e).lower()):

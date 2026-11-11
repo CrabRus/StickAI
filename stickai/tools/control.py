@@ -117,6 +117,97 @@ def window_pid(hwnd: int) -> int:
     return int(pid.value)
 
 
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                ctypes.POINTER(wintypes.DWORD)]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+FRIENDLY = {"chrome": "Chrome", "msedge": "Edge", "firefox": "Firefox", "opera": "Opera", "brave": "Brave",
+            "explorer": "File Explorer", "code": "VS Code", "notepad": "Notepad", "winword": "Word",
+            "excel": "Excel", "powerpnt": "PowerPoint", "outlook": "Outlook", "telegram": "Telegram",
+            "discord": "Discord", "spotify": "Spotify", "steam": "Steam", "vlc": "VLC", "cmd": "Command Prompt",
+            "windowsterminal": "Terminal", "powershell": "PowerShell", "obs64": "OBS", "slack": "Slack",
+            "calculatorapp": "Calculator", "calculator": "Calculator", "systemsettings": "Settings",
+            "photos": "Photos", "microsoft.media.player": "Media Player", "hxoutlook": "Mail"}
+FRAME_HOST = "applicationframehost"  # Store apps' windows belong to this shared host process
+_ENUM_CHILD = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user32.EnumChildWindows.argtypes = [wintypes.HWND, _ENUM_CHILD, wintypes.LPARAM]
+_app_names: dict[int, str] = {}
+
+
+def _exe_stem(pid: int) -> str:
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        buf, n = ctypes.create_unicode_buffer(520), wintypes.DWORD(520)
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            return buf.value.rsplit("\\", 1)[-1].rsplit(".", 1)[0]
+    finally:
+        kernel32.CloseHandle(h)
+    return ""
+
+
+def real_pid(hwnd: int) -> int:
+    """The process that really owns a window. For a Store app (Calculator, Settings...) the frame
+    belongs to the shared ApplicationFrameHost; the app itself owns a child window inside it."""
+    pid = window_pid(hwnd)
+    if _exe_stem(pid).lower() != FRAME_HOST:
+        return pid
+    found = []
+
+    @_ENUM_CHILD
+    def cb(child, _l):
+        p = window_pid(child)
+        if p != pid:
+            found.append(p)
+            return False
+        return True
+    user32.EnumChildWindows(hwnd, cb, 0)
+    return found[0] if found else 0  # 0: never kill the shared host
+
+
+def app_name(hwnd: int) -> str:
+    """ "Chrome", "File Explorer"...: which program a window belongs to (titles alone often don't say)."""
+    pid = real_pid(hwnd) or window_pid(hwnd)
+    if pid in _app_names:
+        return _app_names[pid]
+    stem = _exe_stem(pid)
+    name = FRIENDLY.get(stem.lower(), stem) if stem else ""
+    if len(_app_names) > 300:
+        _app_names.clear()
+    _app_names[pid] = name
+    return name
+
+
+def default_browser() -> str | None:
+    """Path of the default web browser's program (from the https association), or None."""
+    import shlex
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\Shell\Associations"
+                            r"\UrlAssociations\https\UserChoice") as k:
+            prog_id = winreg.QueryValueEx(k, "ProgId")[0]
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, prog_id + r"\shell\open\command") as k:
+            cmd = winreg.QueryValueEx(k, "")[0]
+        exe = shlex.split(cmd, posix=False)[0].strip('"')
+        return exe if exe.lower().endswith(".exe") else None
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def open_in_new_window(url: str) -> bool:
+    """Open `url` in a NEW window of the default browser (Chromium browsers and Firefox
+    both understand --new-window). False if the browser couldn't be found."""
+    import subprocess
+    exe = default_browser()
+    if exe is None:
+        return False
+    subprocess.Popen([exe, "--new-window", url], close_fds=True)
+    return True
+
+
 def caption_buttons(hwnd: int, rect) -> dict[str, tuple[int, int]]:
     """Approximate centres of the title-bar buttons (standard 46x30 DIP layout)."""
     s = (user32.GetDpiForWindow(hwnd) or 96) / 96.0
@@ -230,3 +321,43 @@ def place_window(hwnd: int, place: str, work) -> bool:
     mr, mb = outer.right - vis.right, outer.bottom - vis.bottom
     return bool(user32.SetWindowPos(hwnd, 0, int(l - ml), int(t - mt), int(r - l + ml + mr), int(b - t + mt + mb),
                                     SWP_NOZORDER | SWP_NOACTIVATE))
+
+
+# ------------------------------------------------------------ shortcuts
+KEYEVENTF_EXTENDEDKEY = 0x0001
+VK = {
+    "ctrl": 0x11, "control": 0x11, "alt": 0x12, "shift": 0x10, "win": 0x5B,
+    "enter": 0x0D, "return": 0x0D, "tab": 0x09, "esc": 0x1B, "escape": 0x1B, "space": 0x20,
+    "backspace": 0x08, "delete": 0x2E, "del": 0x2E, "insert": 0x2D,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+    "f5": 0x74, "f11": 0x7A,
+    "media_play_pause": 0xB3, "media_next": 0xB0, "media_prev": 0xB1, "volume_mute": 0xAD,
+    "volume_down": 0xAE, "volume_up": 0xAF, "+": 0xBB, "plus": 0xBB, "-": 0xBD, "minus": 0xBD,
+    **{f"f{i}": 0x6F + i for i in range(1, 13)},
+    **{c: ord(c.upper()) for c in "abcdefghijklmnopqrstuvwxyz0123456789"},
+}
+MODIFIERS = {"ctrl", "control", "alt", "shift", "win"}
+EXTENDED = {0x2E, 0x2D, 0x26, 0x28, 0x25, 0x27, 0x24, 0x23, 0x21, 0x22, 0x5B}
+BLOCKED = ({"ctrl", "alt", "delete"}, {"win", "l"}, {"win", "r"})  # system-level: never pressed for you
+
+
+def parse_keys(text: str) -> list[list[str]] | None:
+    """ "ctrl+t, ctrl+l enter" -> [["ctrl","t"], ["ctrl","l"], ["enter"]]; None if anything is unknown."""
+    combos = []
+    for chunk in text.replace(",", " ").split():
+        parts = [p.strip().lower() for p in chunk.split("+") if p.strip()] or (["+"] if "+" in chunk else [])
+        if not parts or any(p not in VK for p in parts) or sum(p not in MODIFIERS for p in parts) != 1:
+            return None
+        if any(set(parts) >= b for b in BLOCKED):
+            return None
+        combos.append(parts)
+    return combos[:8] or None
+
+
+def press_combo(parts: list[str]) -> None:
+    """Hold the modifiers, tap the key, release in reverse order."""
+    codes = [VK[p] for p in parts]
+    flag = lambda vk: KEYEVENTF_EXTENDEDKEY if vk in EXTENDED else 0  # noqa: E731
+    _send(*[_key(vk, flag(vk)) for vk in codes],
+          *[_key(vk, flag(vk) | KEYEVENTF_KEYUP) for vk in reversed(codes)])

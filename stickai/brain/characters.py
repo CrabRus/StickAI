@@ -68,6 +68,7 @@ class Settings:
     control: bool = False       # may close/minimize/open windows and type, after you allow each action
     trust_windows: bool = False  # ...open/close/show/hide windows WITHOUT asking (typing still asks)
     read_fields: bool = False    # ...check spelling in other apps' text fields (reads that one field, locally)
+    start_apps: bool = True      # ...open any app from the Start menu by name (asks unless trusted)
     clipboard: bool = False      # read / replace what you copied, only when your message mentions it
     reminders: bool = True       # "remind me in 20 minutes" (local timers)
     apps: tuple[tuple[str, str], ...] = ()   # (name, path) of apps they may open
@@ -166,6 +167,7 @@ def load_roster(path: Path) -> Roster:
         control=bool(s.get("control", d.control)),
         trust_windows=bool(s.get("trust_windows", d.trust_windows)),
         read_fields=bool(s.get("read_fields", d.read_fields)),
+        start_apps=bool(s.get("start_apps", d.start_apps)),
         clipboard=bool(s.get("clipboard", d.clipboard)),
         reminders=bool(s.get("reminders", d.reminders)),
         apps=_apps(s.get("apps", {})),
@@ -312,6 +314,8 @@ def save_roster(path: Path, roster: Roster) -> None:
         "# With control on: check spelling in a text field of another app when you ask. Reads only",
         "# that field's text, checked on your PC by the Windows spell checker (never sent anywhere).",
         f"read_fields = {str(s.read_fields).lower()}",
+        "# With control on: open any app from your Start menu by its name (\"open Spotify\").",
+        f"start_apps = {str(s.start_apps).lower()}",
         "",
         "# Read and replace what you copied (\"translate what I copied\"), only when your message",
         "# mentions it. The copied text is sent to Google with that message.",

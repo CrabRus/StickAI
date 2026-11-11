@@ -35,6 +35,7 @@ Use the **tray icon** to talk, edit characters, toggle debug, pause, respawn and
      `setx GEMINI_API_KEY "your-key"`
    - or in a `secrets.toml` next to `characters.toml` (git-ignored; copy [secrets.example.toml](secrets.example.toml)):
      `gemini_api_key = "your-key"`
+   - **A key per character (optional):** Settings → Characters → **Own Gemini key**, or a `[character_keys]` table in `secrets.toml` (`yellow = "..."`). One request voices everybody present, so each request uses the key of the character it's *for*: the first one you named in your message, the one you threw, or, for banter and messages to nobody in particular, the present characters take turns. If that key fails or runs out, the shared key and backups are used. Keys are stored only in `secrets.toml`, never in `characters.toml`.
    - **Backup keys (optional):** `backup_api_keys = ["key2"]` in `secrets.toml`. They're tried in order only when the key before is out of quota, rejected, or can't use any of the models; a key that ran out rests for 10 minutes. This doesn't make answers faster. It's useful for a paid key behind your free one. Keys from the same Google Cloud project share one quota, and Google's terms don't allow extra projects just to get around limits.
 3. Run the app and press **Alt+`** (or click the tray icon) to open the **chat window**, then type **hi yellow**. Yellow drops in and answers, both in the chat window and in a yellow speech bubble above his head. Click a bubble to dismiss it.
 

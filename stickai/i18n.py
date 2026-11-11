@@ -226,6 +226,19 @@ STRINGS: dict[str, dict[str, str]] = {
     "spell.add": {"en": "Add to dictionary", "ru": "Добавить в словарь", "sk": "Pridať do slovníka"},
     "spell.ignore": {"en": "Ignore", "ru": "Пропустить", "sk": "Ignorovať"},
     "spell.none": {"en": "(no suggestions)", "ru": "(нет вариантов)", "sk": "(žiadne návrhy)"},
+    "ch.key": {"en": "Own Gemini key", "ru": "Свой ключ Gemini", "sk": "Vlastný kľúč Gemini"},
+    "ch.key_placeholder": {"en": "empty = use the shared key", "ru": "пусто = общий ключ",
+                           "sk": "prázdne = spoločný kľúč"},
+    "ch.key_show": {"en": "Show / hide", "ru": "Показать / скрыть", "sk": "Zobraziť / skryť"},
+    "ch.key_hint": {"en": "Used for requests made for this character (you named them, they were thrown, their turn "
+                          "to start a chat). The shared and backup keys are still used if it runs out. Saved in "
+                          "secrets.toml, never in characters.toml.",
+                    "ru": "Используется для запросов этого персонажа (ты обратился к нему, его бросили, его очередь "
+                          "начать разговор). Если лимит кончится, берутся общий и запасные ключи. Хранится в "
+                          "secrets.toml, а не в characters.toml.",
+                    "sk": "Použije sa pri požiadavkách pre túto postavu (oslovil si ju, hodil si ňou, je na rade "
+                          "začať rozhovor). Keď sa minie limit, použije sa spoločný a záložné kľúče. Uloží sa do "
+                          "secrets.toml, nie do characters.toml."},
     "set.on_top": {"en": "Chat window always on top", "ru": "Окно чата поверх всех окон",
                    "sk": "Okno chatu vždy navrchu"},
     "set.titles": {"en": "Tell them window titles (sent to Google)", "ru": "Сообщать им заголовки окон (отправляется в Google)",

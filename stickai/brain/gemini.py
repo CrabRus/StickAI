@@ -7,6 +7,9 @@ API keys, in the order they're tried:
   1. environment variable GEMINI_API_KEY (or GOOGLE_API_KEY)
   2. secrets.toml next to characters.toml:   gemini_api_key = "..."
   3. secrets.toml backups:                   backup_api_keys = ["...", "..."]
+Each character can also have their own key ([character_keys] in secrets.toml,
+or Settings -> Characters). A request made for that character tries their key
+first, then the shared keys above.
 A backup key is used only when the one before it is out of quota, rejected
 or has no access to any of the models (e.g. a paid key behind a free one).
 """
@@ -60,18 +63,48 @@ def _registry_env(var: str) -> str:
         return ""
 
 
-def find_api_keys(secrets_path: Path) -> list[str]:
-    """Every configured key, primary first, without duplicates."""
+def read_secrets(secrets_path: Path) -> dict:
+    try:
+        return tomllib.loads(secrets_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def character_keys(secrets_path: Path) -> dict[str, str]:
+    table = read_secrets(secrets_path).get("character_keys", {})
+    if not isinstance(table, dict):
+        return {}
+    return {str(k).lower(): str(v).strip() for k, v in table.items() if str(v).strip()}
+
+
+def save_character_keys(secrets_path: Path, keys: dict[str, str]) -> None:
+    """Rewrite secrets.toml with new per-character keys, keeping everything else."""
+    data = read_secrets(secrets_path)
+    data["character_keys"] = {k: v.strip() for k, v in keys.items() if v.strip()}
+    out = ["# StickAI secrets: git-ignored, never share this file.", ""]
+    for k, v in data.items():
+        if k != "character_keys" and isinstance(v, (str, list, bool, int, float)):
+            out.append(f"{k} = {json.dumps(v, ensure_ascii=False)}")
+    out += ["", "# Each character's own key (tried first for requests made for them).", "[character_keys]"]
+    out += [f"{k} = {json.dumps(v)}" for k, v in sorted(data["character_keys"].items())]
+    text = "\n".join(out) + "\n"
+    tomllib.loads(text)  # never write a file we couldn't read back
+    tmp = secrets_path.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(secrets_path)
+
+
+def find_api_keys(secrets_path: Path, owner: str | None = None) -> list[str]:
+    """Every key to try: the owner character's own key, then the primary, then backups."""
     keys: list[str] = []
+    if owner:
+        keys.append(character_keys(secrets_path).get(owner, ""))
     for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         value = os.environ.get(var, "").strip() or _registry_env(var)
         if value:
             keys.append(value)
             break
-    try:
-        data = tomllib.loads(secrets_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, tomllib.TOMLDecodeError):
-        data = {}
+    data = read_secrets(secrets_path)
     keys.append(str(data.get("gemini_api_key", "")).strip())
     backups = data.get("backup_api_keys", [])
     keys += [str(k).strip() for k in (backups if isinstance(backups, list) else [backups])]
@@ -124,30 +157,33 @@ class GeminiClient(QObject):
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gemini")
         self._next_id = 0
 
-    def has_key(self) -> bool:
-        return find_api_key(self.secrets_path) is not None
+    def has_key(self, owner: str | None = None) -> bool:
+        return bool(find_api_keys(self.secrets_path, owner))
 
     def generate(self, models: tuple[str, ...], system: str, prompt: str, schema: dict | None,
-                 temperature: float, image: tuple[bytes, str] | None = None, tag: str = "") -> int:
-        """Queue a request. `image` is (bytes, mime type) sent alongside the prompt."""
+                 temperature: float, image: tuple[bytes, str] | None = None, tag: str = "",
+                 owner: str | None = None) -> int:
+        """Queue a request. `image` is (bytes, mime type) sent alongside the prompt.
+        `owner`: the character it's for; their own key (if they have one) is tried first."""
         self._next_id += 1
         rid = self._next_id
-        self._pool.submit(self._run, rid, models, system, prompt, schema, temperature, image, tag)
+        self._pool.submit(self._run, rid, models, system, prompt, schema, temperature, image, tag, owner)
         return rid
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     # ---------------------------------------------------------- worker side
-    def _run(self, rid, models, system, prompt, schema, temperature, image=None, tag="") -> None:
+    def _run(self, rid, models, system, prompt, schema, temperature, image=None, tag="", owner=None) -> None:
         try:
-            self._run_inner(rid, models, system, prompt, schema, temperature, image, tag)
+            self._run_inner(rid, models, system, prompt, schema, temperature, image, tag, owner)
         except Exception as e:  # never let a worker die silently
             log.exception("Gemini worker crashed")
             self.finished.emit(GeminiResult(rid, error=f"err.other:internal error: {e}", tag=tag))
 
-    def _run_inner(self, rid, models, system, prompt, schema, temperature, image, tag) -> None:
-        keys = find_api_keys(self.secrets_path)
+    def _run_inner(self, rid, models, system, prompt, schema, temperature, image, tag, owner=None) -> None:
+        keys = find_api_keys(self.secrets_path, owner)
+        own = bool(owner) and bool(keys) and character_keys(self.secrets_path).get(owner) == keys[0]
         if not keys:
             self.finished.emit(GeminiResult(rid, error="err.no_key", tag=tag))
             return
@@ -158,7 +194,8 @@ class GeminiClient(QObject):
             if result.error not in KEY_PROBLEMS:
                 break
             if i + 1 < len(keys):
-                log.info("Key #%d: %s; trying backup key #%d", i + 1, result.error, i + 2)
+                who = f"{owner}'s own key" if own and i == 0 else f"key #{i + 1}"
+                log.info("%s: %s; trying the next key", who, result.error)
         self.finished.emit(result)
 
     def _with_key(self, rid, key, models, system, prompt, schema, temperature, image, tag,

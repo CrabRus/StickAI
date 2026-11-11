@@ -5,6 +5,7 @@
 - **Spell-check in the chat box** (Windows spell checker; suggestions, Add to dictionary, Ignore).
 - **Music on speakers while you wear headphones:** choose the music show's output device, or let it
   switch to speakers automatically when headphones are the default.
+- **A Gemini key per character** (Settings → Characters → Own Gemini key); requests for a character use their key first.
 - **Backup Gemini API keys** (`backup_api_keys` in secrets.toml), used only when a key runs out or fails.
 - Code grouped by purpose: `tools/` (things they do for you) and `activities/` (shows).
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QSpinBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from ..brain.characters import BUBBLE_MODES, LANGUAGES, VISION_MODES, Roster, load_defaults, save_roster
 from ..i18n import tr
 from ..tools.files import default_folder
+from ..brain.gemini import character_keys, save_character_keys
 from .hotkey import parse_hotkey
 from . import theme
 from .dialogs import confirm
@@ -81,6 +82,18 @@ def _dot(color: str, size: int = 14) -> QIcon:
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(color))
     p.drawEllipse(1, 1, size - 2, size - 2)
+    p.end()
+    return QIcon(pm)
+
+
+def _glyph(text: str, size: int = 32) -> QIcon:
+    """An emoji drawn into an icon (QLineEdit actions show icons, not text)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setFont(QFont("Segoe UI Emoji", int(size * 0.55)))
+    p.setPen(QColor("#c9ccd2"))
+    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, text)
     p.end()
     return QIcon(pm)
 
@@ -321,6 +334,18 @@ class SettingsDialog(QDialog):
         self.c_energy = _SliderBox(0.0, 2.0, 0.05, "")
         self.c_climb = _SliderBox(0.0, 1.0, 0.01, " %", percent=True)
         self.c_restless = _SliderBox(0.0, 5.0, 0.05, "")
+        self.c_apikey = QLineEdit()
+        self.c_apikey.setEchoMode(QLineEdit.EchoMode.Password)
+        self.c_apikey.setPlaceholderText(tr("ch.key_placeholder"))
+        self.c_apikey.setClearButtonEnabled(True)
+        eye = self.c_apikey.addAction(_glyph("👁"), QLineEdit.ActionPosition.TrailingPosition)
+        eye.setToolTip(tr("ch.key_show"))
+        eye.triggered.connect(lambda: self.c_apikey.setEchoMode(
+            QLineEdit.EchoMode.Normal if self.c_apikey.echoMode() == QLineEdit.EchoMode.Password
+            else QLineEdit.EchoMode.Password))
+        self.c_apikey.textEdited.connect(self._key_edited)
+        self._char_keys: dict[str, str] = {}
+        self._saved_keys: dict[str, str] = {}
         self.c_personality = QPlainTextEdit()
         self.c_personality.setObjectName("Long")
         self.c_personality.setMinimumHeight(150)
@@ -345,6 +370,11 @@ class SettingsDialog(QDialog):
         form.addRow("", energy_hint)
         form.addRow(tr("ch.climb"), self.c_climb)
         form.addRow(tr("ch.restless"), self.c_restless)
+        form.addRow(tr("ch.key"), self.c_apikey)
+        key_hint = QLabel(tr("ch.key_hint"))
+        key_hint.setObjectName("Hint")
+        key_hint.setWordWrap(True)
+        form.addRow("", key_hint)
         sec = QLabel(tr("ch.personality"))
         sec.setObjectName("Section")
         form.addRow(sec)
@@ -420,6 +450,10 @@ class SettingsDialog(QDialog):
 
     # ============================================================== loading
     def load_from_app(self) -> None:
+        self._saved_keys = character_keys(self.app.director.client.secrets_path)
+        self._char_keys = dict(self._saved_keys)
+        if self.current:
+            self.c_apikey.setText(self._char_keys.get(self.current, ""))
         self._show_roster(self.app.roster)
         self._set_status("")
 
@@ -510,6 +544,8 @@ class SettingsDialog(QDialog):
         self.c_restless.set_value(c.restlessness)
         self.c_personality.setPlainText(c.personality)
         self.c_voice.setPlainText(c.voice)
+        self.c_apikey.setText(self._char_keys.get(key, ""))
+        self.c_apikey.setEchoMode(QLineEdit.EchoMode.Password)
         notes = self.app.memory.facts.get("characters", {}).get(key, [])
         self.c_memory.setText("\n".join(f"• {n}" for n in notes) if notes else tr("ch.remembers_none"))
         self._loading = was
@@ -542,6 +578,11 @@ class SettingsDialog(QDialog):
         if item is not None and item.text() != c.display_name:
             item.setText(c.display_name)
         self._dirty()
+
+    def _key_edited(self, text: str) -> None:
+        if self.current is not None:
+            self._char_keys[self.current] = text.strip()
+            self._dirty()
 
     def _show_color(self, color: str) -> None:
         self.c_color.setText(f"  {color.upper()}")
@@ -613,6 +654,10 @@ class SettingsDialog(QDialog):
             hotkey=hotkey, hide_hotkey=hide_hotkey, models=models)
         try:
             save_roster(self.app.characters_path, self.draft)
+            keys = {k: v for k, v in self._char_keys.items() if v and k in self.draft.characters}
+            if keys != self._saved_keys:  # only touch secrets.toml when a key changed
+                save_character_keys(self.app.director.client.secrets_path, keys)
+                self._saved_keys = dict(keys)
         except OSError as e:
             self._set_status(str(e), error=True)
             return

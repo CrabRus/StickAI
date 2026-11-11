@@ -172,8 +172,8 @@ class Director(QObject):
 
     # ----------------------------------------------------------- requests
     def _send(self, tag: str, prompt: str, thinking: list[str], schema: dict | None,
-              system: str | None = None, image=None, **extra) -> bool:
-        if not self.client.has_key():
+              system: str | None = None, image=None, owner: str | None = None, **extra) -> bool:
+        if not self.client.has_key(owner):
             self.status.emit(tr("err.no_key"))
             return False
         # Pro (if chosen) is spent only on replies to you; background chatter, reactions and
@@ -182,12 +182,19 @@ class Director(QObject):
         if tag != "chat":
             models = tuple(m for m in models if "pro" not in m) or ("gemini-3.5-flash-lite", "gemini-3.8-flash")
         rid = self.client.generate(models, system or self._system(), prompt, schema,
-                                   self.settings.temperature, image=image, tag=tag)
+                                   self.settings.temperature, image=image, tag=tag, owner=owner)
         self._pending = {"rid": rid, "tag": tag, "thinking": thinking, **extra}
         for k in thinking:
             self.app.show_thinking(k, True)
         self.thinking.emit(True)
         return True
+
+    def _next_owner(self, present: list[str]) -> str | None:
+        """Take turns: a request nobody in particular owns uses the next present character's key."""
+        if not present:
+            return None
+        self._owner_turn = (getattr(self, "_owner_turn", -1) + 1) % len(present)
+        return present[self._owner_turn]
 
     def _send_chat(self, entry: Entry, image, addressed: list[str], screenshot=None) -> None:
         present = self.app.present_keys()
@@ -212,7 +219,10 @@ class Director(QObject):
                          "also fill image_note with a one-line description of it for your memory.")
         lines.append(f"Addressed by name: {', '.join(addressed) if addressed else 'nobody in particular'}")
         self.status.emit("")
-        self._send("chat", "\n".join(lines), addressed or present, self._schema(present), image=image, entry=entry,
+        # whose key: the first character you named, else whoever's turn it is
+        owner = addressed[0] if addressed else self._next_owner(present)
+        self._send("chat", "\n".join(lines), addressed or present, self._schema(present), image=image, owner=owner,
+                   entry=entry,
                    addressed=addressed, targets=targets, looked=screenshot is not None,
                    had_image=image is not None)
 
@@ -234,7 +244,8 @@ class Director(QObject):
                 self.note_event(tr("ev.looked", name=self.name(looker)))
                 lines.append(f"{self.name(looker)} just peeked at the user's screen: the attached image is a "
                              "screenshot of it. They may comment on what the user is doing (kindly, briefly).")
-        return self._send("banter", "\n".join(lines), [], self._schema(present), image=shot)
+        return self._send("banter", "\n".join(lines), [], self._schema(present), image=shot,
+                          owner=self._next_owner(present))
 
     def react(self, key: str, event: str) -> None:
         """Something just happened to `key`; maybe let them comment on it."""
@@ -249,7 +260,7 @@ class Director(QObject):
         lines += ["", f"This just happened: {event}",
                   f"{self.name(key)} reacts with one short line (usually to the user). "
                   "At most one other character may chime in."]
-        self._send("react", "\n".join(lines), [key], self._schema(present))
+        self._send("react", "\n".join(lines), [key], self._schema(present), owner=key)
 
     def maybe_summarize(self) -> None:
         todo = self.memory.unsummarized

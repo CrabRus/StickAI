@@ -67,6 +67,10 @@ class Settings:
     vision: str = "off"         # off | ask (when you ask / they want to look) | auto (also on their own)
     control: bool = False       # may close/minimize/open windows and type, after you allow each action
     trust_windows: bool = False  # ...open/close/show/hide windows WITHOUT asking (typing still asks)
+    read_fields: bool = False    # ...check spelling in other apps' text fields (reads that one field, locally)
+    clipboard: bool = False      # read / replace what you copied, only when your message mentions it
+    reminders: bool = True       # "remind me in 20 minutes" (local timers)
+    apps: tuple[tuple[str, str], ...] = ()   # (name, path) of apps they may open
     files: bool = False          # may create folders / create, edit, open text files in files_folder
     files_folder: str = ""       # empty = Documents\StickAI
     trust_files: bool = False    # ...without asking
@@ -161,6 +165,10 @@ def load_roster(path: Path) -> Roster:
         vision=_choice(s.get("vision", d.vision), VISION_MODES, "vision"),
         control=bool(s.get("control", d.control)),
         trust_windows=bool(s.get("trust_windows", d.trust_windows)),
+        read_fields=bool(s.get("read_fields", d.read_fields)),
+        clipboard=bool(s.get("clipboard", d.clipboard)),
+        reminders=bool(s.get("reminders", d.reminders)),
+        apps=_apps(s.get("apps", {})),
         files=bool(s.get("files", d.files)),
         files_folder=str(s.get("files_folder", d.files_folder)),
         trust_files=bool(s.get("trust_files", d.trust_files)),
@@ -213,6 +221,12 @@ def _str(v: str) -> str:
 def _ml(v: str) -> str:
     v = v.replace("\\", "\\\\").replace('"""', '\\"""')
     return f'"""\n{v.strip()}\n"""'
+
+
+def _apps(v) -> tuple[tuple[str, str], ...]:
+    if not isinstance(v, dict):
+        raise ValueError('apps must be a table like apps = { "Spotify" = "C:/.../Spotify.exe" }')
+    return tuple((str(k).strip(), str(p).strip()) for k, p in v.items() if str(k).strip() and str(p).strip())
 
 
 def _list(vs) -> str:
@@ -295,6 +309,19 @@ def save_roster(path: Path, roster: Roster) -> None:
         "# With control on: open / close / show / hide windows WITHOUT asking first",
         "# (only when you ask for it in the chat; typing text still asks every time).",
         f"trust_windows = {str(s.trust_windows).lower()}",
+        "# With control on: check spelling in a text field of another app when you ask. Reads only",
+        "# that field's text, checked on your PC by the Windows spell checker (never sent anywhere).",
+        f"read_fields = {str(s.read_fields).lower()}",
+        "",
+        "# Read and replace what you copied (\"translate what I copied\"), only when your message",
+        "# mentions it. The copied text is sent to Google with that message.",
+        f"clipboard = {str(s.clipboard).lower()}",
+        "",
+        "# Timers and reminders (\"remind me in 20 minutes to stretch\"). Counted down on your PC.",
+        f"reminders = {str(s.reminders).lower()}",
+        "",
+        "# Apps they may open when you ask (\"open Spotify\"): name = program, shortcut or file.",
+        "apps = {" + ", ".join(f"{_str(n)} = {_str(p)}" for n, p in s.apps) + "}",
         "",
         "# Their own folder: create folders and create / edit / open text files ONLY in there",
         "# (empty = Documents\\StickAI). Old versions are backed up before edits. File names and the",

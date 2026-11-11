@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **New tools** (see README → More tools): click a button by name, scroll (and read) a page,
+  arrange windows, open apps from your allow-list, spell-check another app's text field on this PC,
+  clipboard helper, timers and reminders.
+- The chat window steps aside when it covers what a task needs to click (also fixes typing tasks).
 - **Spell-check in the chat box** (Windows spell checker; suggestions, Add to dictionary, Ignore).
 - **Music on speakers while you wear headphones:** choose the music show's output device, or let it
   switch to speakers automatically when headphones are the default.

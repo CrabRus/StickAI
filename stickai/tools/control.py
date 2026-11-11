@@ -111,6 +111,12 @@ def root_at(x: float, y: float) -> int:
     return int(user32.GetAncestor(h, GA_ROOT) or 0) if h else 0
 
 
+def window_pid(hwnd: int) -> int:
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return int(pid.value)
+
+
 def caption_buttons(hwnd: int, rect) -> dict[str, tuple[int, int]]:
     """Approximate centres of the title-bar buttons (standard 46x30 DIP layout)."""
     s = (user32.GetDpiForWindow(hwnd) or 96) / 96.0
@@ -169,3 +175,58 @@ def type_char(ch: str) -> None:
     for i in range(0, len(data), 2):
         unit = int.from_bytes(data[i:i + 2], "little")
         _send(_key(0, KEYEVENTF_UNICODE, unit), _key(0, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, unit))
+
+
+# ------------------------------------------------------------ scrolling
+MOUSEEVENTF_WHEEL = 0x0800
+WHEEL_DELTA = 120
+
+
+def scroll(notches: int) -> None:
+    """Mouse wheel at the cursor: positive = down the page, negative = up."""
+    delta = ctypes.c_int32(-int(notches) * WHEEL_DELTA).value & 0xFFFFFFFF  # DWORD holds the signed delta
+    _send(INPUT(INPUT_MOUSE, _INPUTUNION(mi=MOUSEINPUT(0, 0, delta, MOUSEEVENTF_WHEEL, 0, 0))))
+
+
+# ------------------------------------------------------- window layout
+SW_MAXIMIZE = 3
+SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
+user32.IsZoomed.argtypes = [wintypes.HWND]
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, wintypes.UINT]
+DWMWA_EXTENDED_FRAME_BOUNDS = 9
+
+# where a window goes, as fractions (left, top, right, bottom) of the screen's work area
+PLACES = {
+    "left": (0, 0, .5, 1), "right": (.5, 0, 1, 1), "top": (0, 0, 1, .5), "bottom": (0, .5, 1, 1),
+    "top_left": (0, 0, .5, .5), "top_right": (.5, 0, 1, .5),
+    "bottom_left": (0, .5, .5, 1), "bottom_right": (.5, .5, 1, 1),
+    "left_third": (0, 0, 1 / 3, 1), "middle_third": (1 / 3, 0, 2 / 3, 1), "right_third": (2 / 3, 0, 1, 1),
+    "center": (.15, .1, .85, .9), "maximize": (0, 0, 1, 1),
+}
+
+
+def place_window(hwnd: int, place: str, work) -> bool:
+    """Snap a window into `place` on a monitor work area (Rect with left/top/right/bottom).
+    The visible edges land exactly on the target (Windows 10/11 windows have an invisible
+    resize border that GetWindowRect includes, so it's added back)."""
+    frac = PLACES.get(place)
+    if frac is None or not exists(hwnd):
+        return False
+    if place == "maximize":
+        user32.ShowWindow(hwnd, SW_MAXIMIZE)
+        return True
+    if user32.IsIconic(hwnd) or user32.IsZoomed(hwnd):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+    w, h = work.right - work.left, work.bottom - work.top
+    l, t = work.left + frac[0] * w, work.top + frac[1] * h
+    r, b = work.left + frac[2] * w, work.top + frac[3] * h
+    outer, vis = wintypes.RECT(), wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(outer))
+    if dwmapi.DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(vis), ctypes.sizeof(vis)) != 0:
+        vis = outer
+    ml, mt = vis.left - outer.left, vis.top - outer.top
+    mr, mb = outer.right - vis.right, outer.bottom - vis.bottom
+    return bool(user32.SetWindowPos(hwnd, 0, int(l - ml), int(t - mt), int(r - l + ml + mr), int(b - t + mt + mb),
+                                    SWP_NOZORDER | SWP_NOACTIVATE))

@@ -43,6 +43,11 @@ log = logging.getLogger("stickai.director")
 STOP_WORDS = ("stop", "enough", "quit", "стоп", "хватит", "остановись", "dosť", "prestaň", "stoj")
 ACTIONS = ("none", "wave", "jump", "run", "sit", "approach", "leave", "music", "watch", "remove_couch")
 MAX_IMAGE_SIDE = 1024
+# A message that mentions the clipboard (only then is it read, and only with the setting on).
+CLIPBOARD_WORDS = re.compile(
+    r"clipboard|copied|i copy|what i cop|буфер|скопировал|скопировала|скопированн|копирнул|schránk|skopíroval|skopírovan",
+    re.IGNORECASE)
+MAX_CLIPBOARD_SENT = 4000
 # Words that only call someone over. A message made of names + these is "just a summon"
 # (with greet_on_arrival off, nobody answers it).
 SUMMON_FILLER = {
@@ -196,13 +201,15 @@ class Director(QObject):
         self._owner_turn = (getattr(self, "_owner_turn", -1) + 1) % len(present)
         return present[self._owner_turn]
 
-    def _send_chat(self, entry: Entry, image, addressed: list[str], screenshot=None) -> None:
+    def _send_chat(self, entry: Entry, image, addressed: list[str], screenshot=None, scrolled: bool = False) -> None:
         present = self.app.present_keys()
+        self._last_chat = (entry, addressed)
         lines = self._situation(present)
         targets: dict = {}
         if self.settings.control:
             ctl, targets = self._control_lines()
             lines += [""] + ctl
+        lines += self._tool_lines(entry, addressed or present)
         if self.settings.files:
             ws = Workspace(self.settings.files_folder)
             lines += ["", f"Your folder ({ws.root.name}) contains:"] + [f"- {x}" for x in ws.listing()] \
@@ -210,7 +217,12 @@ class Director(QObject):
             for path, text in ws.recent_texts():
                 lines += [f"--- {path} ---", text, "--- end ---"]
         lines += ["", f"User's new message: {entry.text or '(no text)'}"]
-        if screenshot is not None:
+        if screenshot is not None and scrolled:
+            image = screenshot
+            lines.append("You just scrolled the page for the user; the attached image is the screen now. Briefly "
+                         "tell the user what's visible (the useful part, not every detail). Don't scroll again "
+                         "unless the user's message asked for more than one screen.")
+        elif screenshot is not None:
             image = screenshot
             lines.append("You asked to look, so the attached image is a screenshot of the user's screen right "
                          "now. React to what you actually see, be specific. Don't ask to look again.")
@@ -225,6 +237,62 @@ class Director(QObject):
                    entry=entry,
                    addressed=addressed, targets=targets, looked=screenshot is not None,
                    had_image=image is not None)
+
+    def _tool_lines(self, entry: Entry, who: list[str]) -> list[str]:
+        """Context the extra tools need: apps, screens, reminders, and the clipboard (if you mentioned it)."""
+        s, out = self.settings, []
+        if s.apps:
+            out += ["", "Apps you may open (launch_app, app = one of these names): "
+                    + ", ".join(n for n, _p in s.apps)]
+        if s.control:
+            mons = self.app.scene.monitors
+            if len(mons) > 1:
+                out += ["", "Screens (monitor ids for arrange_windows):"] + [
+                    f"{i}: {m.bounds.width}x{m.bounds.height}{' (primary)' if m.primary else ''}"
+                    for i, m in enumerate(mons, 1)]
+        if s.reminders:
+            pending = self.app.reminders.describe()
+            out += ["", "Pending reminders:"] + pending if pending else ["", "No reminders set."]
+        if s.clipboard and entry.text and CLIPBOARD_WORDS.search(entry.text):
+            from PySide6.QtGui import QGuiApplication
+            clip = QGuiApplication.clipboard().text()
+            if clip.strip():
+                out += ["", "What the user copied (their clipboard):", "--- clipboard ---",
+                        clip[:MAX_CLIPBOARD_SENT] + (" […]" if len(clip) > MAX_CLIPBOARD_SENT else ""),
+                        "--- end ---"]
+                self.note_event(tr("ev.read_clip", name=self.name(who[0]) if who else "?"))
+            else:
+                out += ["", "The user's clipboard is empty (or holds no text)."]
+        return out
+
+    def read_after_scroll(self, key: str) -> None:
+        """A scroll_page task with "read" finished: look at the screen and answer again."""
+        last = getattr(self, "_last_chat", None)
+        if last is None or self._pending is not None or self.settings.vision == "off":
+            return
+        shot = self.app.capture_screen()
+        if shot is None:
+            return
+        self.note_event(tr("ev.looked", name=self.name(key)))
+        entry, addressed = last
+        self._send_chat(entry, None, addressed or [key], screenshot=shot, scrolled=True)
+
+    def _task_kinds(self) -> list[str]:
+        s, kinds = self.settings, []
+        if s.control:
+            kinds += ["close_window", "minimize_window", "restore_window", "type_text", "click_game",
+                      "click_button", "scroll_page", "arrange_windows"]
+            if s.read_fields:
+                kinds.append("check_field")
+        if s.files:
+            kinds += ["create_folder", "write_file", "open_path"]
+        if s.apps:
+            kinds.append("launch_app")
+        if s.clipboard:
+            kinds.append("set_clipboard")
+        if s.reminders:
+            kinds += ["remind", "cancel_reminders"]
+        return kinds
 
     def banter(self) -> bool:
         """Let the characters chat among themselves. Returns True if started."""
@@ -379,11 +447,7 @@ Rules:
             "text": {"type": "STRING"},
             "action": {"type": "STRING", "enum": list(ACTIONS)},
         }
-        kinds = []
-        if self.settings.control:
-            kinds += ["close_window", "minimize_window", "restore_window", "type_text", "click_game"]
-        if self.settings.files:
-            kinds += ["create_folder", "write_file", "open_path"]
+        kinds = self._task_kinds()
         if kinds:
             item["task"] = {"type": "OBJECT", "properties": {
                 "kind": {"type": "STRING", "enum": kinds},
@@ -395,6 +459,16 @@ Rules:
                 "at_y": {"type": "NUMBER"},
                 "path": {"type": "STRING"},
                 "content": {"type": "STRING"},
+                "direction": {"type": "STRING", "enum": ["down", "up"]},
+                "amount": {"type": "NUMBER"},
+                "read": {"type": "BOOLEAN"},
+                "place": {"type": "STRING", "enum": list(control.PLACES)},
+                "monitor": {"type": "INTEGER"},
+                "arrange": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
+                    "window": {"type": "INTEGER"},
+                    "place": {"type": "STRING", "enum": list(control.PLACES)}}, "required": ["window", "place"]}},
+                "app": {"type": "STRING"},
+                "seconds": {"type": "NUMBER"},
             }, "required": ["kind"]}
         props = {
             "replies": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": item,
@@ -429,6 +503,33 @@ Rules:
                 'screenshot (0..1 fractions of its width / height). If you have no screenshot this turn and can look, '
                 'set "look": true first (no task yet) so you can name the colour; otherwise just send the task. Then you keep clicking targets until the user '
                 'says stop or moves the mouse.')
+        if s.control:
+            out.append(
+                '\n- More window tools (same rules: only when the user asks): click_button (window = id, text = the '
+                'button / link / tab label as shown, e.g. "Save" or "Next"); scroll_page (window = id, direction '
+                '"down"/"up", amount = screens, default 1' + (', read = true if the user wants to know what\'s '
+                'there: you\'ll get a screenshot after scrolling' if s.vision != "off" else '') + '); '
+                'arrange_windows (arrange = [{window, place}], place: left, right, top, bottom, top_left, top_right, '
+                'bottom_left, bottom_right, left_third, middle_third, right_third, center, maximize; optional '
+                'monitor id). For "X on the left and Y on the right" use ONE arrange_windows task with both.')
+            if s.read_fields:
+                out.append(
+                    '\n- check_field (field = id): when the user asks you to check / fix the spelling in a text field '
+                    'of another app. It is checked on the user\'s PC; you never see the text. Just say you\'ll look.')
+        if s.apps:
+            out.append('\n- launch_app (app = a name from "Apps you may open"): open a program when the user asks. '
+                       'Never open apps that aren\'t on that list.')
+        if s.clipboard:
+            out.append(
+                '\n- When the user mentions what they copied, its text is included below. If they ask you to '
+                'translate / fix / shorten / rewrite it, put the COMPLETE result in a set_clipboard task (text = the '
+                'result) and keep your spoken reply short ("Done, it\'s on your clipboard!").')
+        if s.reminders:
+            out.append(
+                '\n- Reminders: "remind me in 20 minutes to stretch" -> task remind (seconds = delay from now, '
+                'text = the reminder, short, in the user\'s words, said by you later). For a clock time, compute '
+                'seconds from the local time given above. cancel_reminders (text = part of the reminder, or empty '
+                'for all). You do the reminding yourselves later; no need to repeat it now.')
         if s.files:
             out.append(
                 '\n- You have your own folder on the user\'s PC (listed below with its files). When the user asks, '
@@ -528,7 +629,7 @@ Rules:
             self.status.emit(tr("st.no_answer"))
         # a task is only ever taken from a reply to the user's own message
         task_from = None
-        if p["tag"] == "chat" and (self.settings.control or self.settings.files):
+        if p["tag"] == "chat" and self._task_kinds():
             for r in data.get("replies", []):
                 k = self._resolve(r.get("speaker", ""))
                 if isinstance(r.get("task"), dict) and k in present:

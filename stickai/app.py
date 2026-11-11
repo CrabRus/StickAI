@@ -21,6 +21,7 @@ from . import config
 from .brain.characters import Roster, load_roster
 from .brain.director import Director
 from .tools.tasks import TaskRunner
+from .tools.reminders import ReminderBook
 from .desktop import win32
 from .desktop.scene import DesktopScene
 from .desktop.win32 import Rect
@@ -115,6 +116,7 @@ class StickApp:
         self.memory = MemoryStore(self.characters_path.parent / "memory")
         self.director = Director(self, self.characters_path.parent / "secrets.toml", self.memory)
         self.tasks = TaskRunner(self)
+        self.reminders = ReminderBook(self, self.characters_path.parent / "memory" / "reminders.json")
         self.music = MusicShow(self)
         self.couch = Couch(self)
         self.chat = ChatWindow(self)
@@ -421,11 +423,13 @@ class StickApp:
             return "standing on top of an open window"
         return "on the desktop"
 
-    def say(self, key: str, text: str, action: str = "none", to: str = "user") -> None:
+    def say(self, key: str, text: str, action: str = "none", to: str = "user", force_bubble: bool = False) -> None:
+        """Show a line above a character. force_bubble: a full bubble whatever the bubble
+        setting (reminders and tool results you need to read right there)."""
         s = self.world.get(key)
         if s is None:
             return
-        mode = "off" if self.hidden else self.roster.settings.bubbles
+        mode = "off" if self.hidden else ("full" if force_bubble else self.roster.settings.bubbles)
         if mode != "off":
             b = self.bubbles.get(key)
             if b is None:

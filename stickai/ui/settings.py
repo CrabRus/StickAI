@@ -229,6 +229,18 @@ class SettingsDialog(QDialog):
         self.web = QCheckBox(tr("set.web"))
         self.control = QCheckBox(tr("set.control"))
         self.trust = QCheckBox(tr("set.trust"))
+        self.read_fields = QCheckBox(tr("set.read_fields"))
+        self.read_fields.setStyleSheet("margin-left: 22px;")
+        self.control.toggled.connect(self.read_fields.setEnabled)
+        self.clipboard = QCheckBox(tr("set.clipboard"))
+        self.reminders = QCheckBox(tr("set.reminders"))
+        self.apps = QPlainTextEdit()
+        self.apps.setPlaceholderText("Spotify = C:/Users/…/AppData/Roaming/Spotify/Spotify.exe\n"
+                                     "Notepad = notepad.exe")
+        self.apps.setFixedHeight(84)
+        self.apps.textChanged.connect(self._dirty)
+        apps_add = QPushButton(tr("set.apps_add"))
+        apps_add.clicked.connect(self._add_app)
         self.files = QCheckBox(tr("set.files"))
         self.trust_files = QCheckBox(tr("set.trust_files"))
         self.trust_files.setStyleSheet("margin-left: 22px;")
@@ -246,14 +258,24 @@ class SettingsDialog(QDialog):
         self.on_top = QCheckBox(tr("set.on_top"))
         self.spellcheck = QCheckBox(tr("set.spellcheck"))
         self.titles = QCheckBox(tr("set.titles"))
-        for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
-                   self.trust_files):
+        for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.read_fields,
+                   self.clipboard, self.reminders, self.files, self.trust_files):
             form.addRow("", cb)
         form.addRow(tr("set.files_folder"), self._folder_row)
         fh = QLabel(tr("set.files_hint"))
         fh.setObjectName("Hint")
         fh.setWordWrap(True)
         form.addRow("", fh)
+        apps_col = QVBoxLayout()
+        apps_col.addWidget(self.apps)
+        apps_row = QHBoxLayout()
+        apps_hint = QLabel(tr("set.apps_hint"))
+        apps_hint.setObjectName("Hint")
+        apps_hint.setWordWrap(True)
+        apps_row.addWidget(apps_hint, 1)
+        apps_row.addWidget(apps_add, 0, Qt.AlignmentFlag.AlignTop)
+        apps_col.addLayout(apps_row)
+        form.addRow(tr("set.apps"), apps_col)
         for cb in (self.on_top, self.spellcheck, self.titles):
             form.addRow("", cb)
 
@@ -302,7 +324,8 @@ class SettingsDialog(QDialog):
         for w in (self.lang, self.bubbles, self.vision):
             w.currentIndexChanged.connect(self._dirty)
         for w in (self.banter, self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
-                  self.trust_files, self.on_top, self.spellcheck, self.titles):
+                  self.trust_files, self.on_top, self.spellcheck, self.titles, self.read_fields, self.clipboard,
+                  self.reminders):
             w.toggled.connect(self._dirty)
         for w in (self.b_lo, self.b_hi):
             w.valueChanged.connect(self._dirty)
@@ -474,6 +497,11 @@ class SettingsDialog(QDialog):
         self.control.setChecked(s.control)
         self.trust.setChecked(s.trust_windows)
         self.trust.setEnabled(s.control)
+        self.read_fields.setChecked(s.read_fields)
+        self.read_fields.setEnabled(s.control)
+        self.clipboard.setChecked(s.clipboard)
+        self.reminders.setChecked(s.reminders)
+        self.apps.setPlainText("\n".join(f"{n} = {p}" for n, p in s.apps))
         self.files.setChecked(s.files)
         self.trust_files.setChecked(s.trust_files)
         self.trust_files.setEnabled(s.files)
@@ -645,7 +673,8 @@ class SettingsDialog(QDialog):
         self.draft = self.draft.with_settings(
             language=self.lang.currentData(), bubbles=self.bubbles.currentData(), banter=self.banter.isChecked(),
             banter_every=(max(30.0, lo), max(30.0, hi)), react_to_throws=self.react.isChecked(),
-            greet_on_arrival=self.greet.isChecked(),
+            greet_on_arrival=self.greet.isChecked(), read_fields=self.read_fields.isChecked(),
+            clipboard=self.clipboard.isChecked(), reminders=self.reminders.isChecked(), apps=self._apps_list(),
             chat_on_top=self.on_top.isChecked(), spellcheck=self.spellcheck.isChecked(), widgets=self.widgets.isChecked(), web_surfaces=self.web.isChecked(),
             vision=self.vision.currentData(), control=self.control.isChecked(), trust_windows=self.trust.isChecked(),
             files=self.files.isChecked(), trust_files=self.trust_files.isChecked(),
@@ -686,6 +715,30 @@ class SettingsDialog(QDialog):
         for n in names:
             self.music_out.addItem("🔊 " + n, n)
         self.music_out.setCurrentIndex(max(0, self.music_out.findData(current)))
+
+    def _apps_list(self) -> tuple[tuple[str, str], ...]:
+        """ "Name = path" lines -> ((name, path), ...); a bare path is named after its file."""
+        out, seen = [], set()
+        for line in self.apps.toPlainText().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, sep, path = line.partition("=")
+            if not sep:
+                name, path = Path(line.strip('"')).stem, line
+            name, path = name.strip(), path.strip().strip('"')
+            if name and path and name.lower() not in seen:
+                seen.add(name.lower())
+                out.append((name, path))
+        return tuple(out)
+
+    def _add_app(self) -> None:
+        start = os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs")
+        path, _ = QFileDialog.getOpenFileName(self, tr("set.apps_add"), start,
+                                              "Apps (*.exe *.lnk *.url *.bat *.cmd);;All files (*)")
+        if path:
+            text = self.apps.toPlainText().rstrip()
+            self.apps.setPlainText((text + "\n" if text else "") + f"{Path(path).stem} = {path}")
 
     def _browse_music(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("set.music"), self.music_file.text() or str(Path.home() / "Music"),

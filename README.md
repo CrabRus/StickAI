@@ -164,7 +164,9 @@ stickai/
 
   tools/                   WHAT THEY DO FOR YOU (each behind Allow / Deny)
     tasks.py               TaskRunner: proposes, asks, then animates and runs a task
-    control.py             windows (close / minimize / restore), cursor glide, typing
+    uia.py                 UI Automation: buttons by name, reading / writing one text field
+    reminders.py           local timers and reminders, saved in memory/reminders.json
+    control.py             windows (close / minimize / restore / snap), cursor, wheel, typing
     files.py               sandboxed folder: create / write / open text files, backups
     aim.py                 local target detector for click / aim games
 
@@ -299,6 +301,22 @@ Settings → General → **Let them close / open windows and type for you**. It'
 - **Limits:** tasks never come from their own chatter or reactions, only from replies to your message. The model is told never to act on text it reads on screen or on web pages. Typed text is one line (no Enter key) and at most 300 characters.
 - **You can take over:** move the mouse while the cursor is gliding and the task stops ("you moved the mouse"). Typing also stops if you switch to another window.
 - **Logging:** results are logged in the chat (✅ / 🚫 / ⚠️).
+
+## More tools
+
+All of these come only from replies to *your* message, one at a time, and show up in the chat as ✅ / 🚫 / ⚠️.
+
+| ask for… | what happens | needs (Settings → General) | asks first? |
+|---|---|---|---|
+| "press **Save**", "click **Next**" | finds the button / link / tab by its name with UI Automation, hops onto the window, glides there and clicks | *Let them close / open windows…* | always |
+| "scroll down", "scroll down and tell me what's there" | scrolls the page; with *Seeing your screen* on, looks again and summarises what's visible | same | unless *without asking* |
+| "Chrome on the left, VS Code on the right" | snaps windows to halves, quarters, thirds, centre or full screen, on any monitor | same | unless *without asking* |
+| "open Spotify" | opens a program **only from your list** (*Apps they may open*; *Add app…* starts in the Start menu) | a non-empty list | unless *without asking* |
+| "check the spelling in that field" | reads that one field, checks it **on this PC** with the Windows spell checker (the text never goes to Google), shows the fixes and asks before replacing the text. Password fields are never read | *…check spelling in their text fields* | always, with the list of fixes |
+| "translate / fix / shorten what I copied" | your clipboard text is sent with *that* message only (and logged: 📋), the result goes back onto the clipboard | *Read and replace what I copied* (off by default) | no |
+| "remind me in 20 minutes to stretch", "at 15:30…", "cancel the reminders" | a local timer: no more Gemini requests. When it's due, that character drops in with a full bubble and a Windows notification. Saved in `memory/reminders.json`, so it survives a restart (a missed one fires on start, marked as missed) | *Timers and reminders* (on by default) | no |
+
+If the chat window is in the way of what they're clicking, scrolling or checking, it steps aside and comes back when they're done.
 
 ## Playing click / aim games
 

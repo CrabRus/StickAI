@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..brain.characters import BUBBLE_MODES, LANGUAGES, VISION_MODES, Roster, load_defaults, save_roster
 from ..i18n import tr
-from ..desktop.files import default_folder
+from ..tools.files import default_folder
 from .hotkey import parse_hotkey
 from . import theme
 from .dialogs import confirm
@@ -231,6 +231,7 @@ class SettingsDialog(QDialog):
         self.trust.setStyleSheet("margin-left: 22px;")  # visually a sub-option of control
         self.control.toggled.connect(self.trust.setEnabled)
         self.on_top = QCheckBox(tr("set.on_top"))
+        self.spellcheck = QCheckBox(tr("set.spellcheck"))
         self.titles = QCheckBox(tr("set.titles"))
         for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
                    self.trust_files):
@@ -240,7 +241,7 @@ class SettingsDialog(QDialog):
         fh.setObjectName("Hint")
         fh.setWordWrap(True)
         form.addRow("", fh)
-        for cb in (self.on_top, self.titles):
+        for cb in (self.on_top, self.spellcheck, self.titles):
             form.addRow("", cb)
 
         self.couch = QCheckBox(tr("set.couch"))
@@ -257,6 +258,9 @@ class SettingsDialog(QDialog):
         self.music_bpm.setFixedWidth(90)
         form.addRow(tr("set.music"), mrow)
         form.addRow(tr("set.music_bpm"), self.music_bpm)
+        self.music_out = QComboBox()
+        form.addRow(tr("set.music_out"), self.music_out)
+        self.music_out.activated.connect(self._dirty)
         self.music_file.textEdited.connect(self._dirty)
         self.music_bpm.valueChanged.connect(self._dirty)
         self.hotkey = QLineEdit()
@@ -285,7 +289,7 @@ class SettingsDialog(QDialog):
         for w in (self.lang, self.bubbles, self.vision):
             w.currentIndexChanged.connect(self._dirty)
         for w in (self.banter, self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
-                  self.trust_files, self.on_top, self.titles):
+                  self.trust_files, self.on_top, self.spellcheck, self.titles):
             w.toggled.connect(self._dirty)
         for w in (self.b_lo, self.b_hi):
             w.valueChanged.connect(self._dirty)
@@ -442,10 +446,12 @@ class SettingsDialog(QDialog):
         self.files_folder.setText(s.files_folder)
         self.music_file.setText(s.music_file)
         self.music_bpm.setValue(s.music_bpm)
+        self._fill_outputs(s.music_output)
         self.couch.setChecked(s.couch)
         self.files_folder.setEnabled(s.files)
         self.vision.setCurrentIndex(max(0, self.vision.findData(s.vision)))
         self.on_top.setChecked(s.chat_on_top)
+        self.spellcheck.setChecked(s.spellcheck)
         self.titles.setChecked(s.share_window_titles)
         self.hotkey.setText(s.hotkey)
         self.hide_hotkey.setText(s.hide_hotkey)
@@ -599,11 +605,11 @@ class SettingsDialog(QDialog):
             language=self.lang.currentData(), bubbles=self.bubbles.currentData(), banter=self.banter.isChecked(),
             banter_every=(max(30.0, lo), max(30.0, hi)), react_to_throws=self.react.isChecked(),
             greet_on_arrival=self.greet.isChecked(),
-            chat_on_top=self.on_top.isChecked(), widgets=self.widgets.isChecked(), web_surfaces=self.web.isChecked(),
+            chat_on_top=self.on_top.isChecked(), spellcheck=self.spellcheck.isChecked(), widgets=self.widgets.isChecked(), web_surfaces=self.web.isChecked(),
             vision=self.vision.currentData(), control=self.control.isChecked(), trust_windows=self.trust.isChecked(),
             files=self.files.isChecked(), trust_files=self.trust_files.isChecked(),
             files_folder=self.files_folder.text().strip(),
-            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), couch=self.couch.isChecked(), share_window_titles=self.titles.isChecked(),
+            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), share_window_titles=self.titles.isChecked(),
             hotkey=hotkey, hide_hotkey=hide_hotkey, models=models)
         try:
             save_roster(self.app.characters_path, self.draft)
@@ -622,6 +628,19 @@ class SettingsDialog(QDialog):
         if models:
             self.models.setText(", ".join(models))
             self._dirty()
+
+    def _fill_outputs(self, current: str) -> None:
+        """Audio outputs Windows has right now, plus the two automatic choices."""
+        from ..activities.music import AUTO_SPEAKERS, output_names
+        self.music_out.clear()
+        self.music_out.addItem(tr("set.music_out_default"), "")
+        self.music_out.addItem(tr("set.music_out_auto"), AUTO_SPEAKERS)
+        names = output_names()
+        if current and current != AUTO_SPEAKERS and current not in names:
+            names.append(current)  # unplugged right now: keep the choice
+        for n in names:
+            self.music_out.addItem("🔊 " + n, n)
+        self.music_out.setCurrentIndex(max(0, self.music_out.findData(current)))
 
     def _browse_music(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("set.music"), self.music_file.text() or str(Path.home() / "Music"),

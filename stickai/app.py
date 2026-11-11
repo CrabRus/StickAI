@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import config
 from .brain.characters import Roster, load_roster
 from .brain.director import Director
-from .brain.tasks import TaskRunner
+from .tools.tasks import TaskRunner
 from .desktop import win32
 from .desktop.scene import DesktopScene
 from .desktop.win32 import Rect
@@ -34,8 +34,8 @@ from .ui import theme
 from .ui.dialogs import confirm
 from .i18n import set_language, tr
 from .world import World
-from .music import MusicShow
-from .couch import COUCH, Couch
+from .activities.music import MusicShow
+from .activities.couch import COUCH, Couch
 from .desktop.widgets import WidgetScanner
 
 log = logging.getLogger("stickai")
@@ -119,6 +119,7 @@ class StickApp:
         self.couch = Couch(self)
         self.chat = ChatWindow(self)
         self.chat.apply_on_top(self.roster.settings.chat_on_top)
+        self._apply_spellcheck()
         for e in self.memory.entries[-80:]:  # older history stays on disk
             self.chat.add_entry(e, follow=False)
         self.chat.set_present([])
@@ -517,6 +518,11 @@ class StickApp:
             log.info("characters.toml reloaded")
             self.chat.set_status(tr("st.reloaded"))
 
+    def _apply_spellcheck(self) -> None:
+        names = [n for c in self.roster.characters.values() for n in (c.key, c.display_name, *c.aliases)]
+        names += [w for phrase in names + list(self.roster.settings.group_words) for w in phrase.split()]
+        self.chat.input.set_spellcheck(self.roster.settings.spellcheck, names)
+
     def apply_roster(self, roster: Roster) -> None:
         """Make the running app match a (new) roster: language, looks, timers..."""
         old = self.roster.settings
@@ -529,6 +535,7 @@ class StickApp:
             self.chat.retranslate()
             self._build_tray_menu()
         self._update_present()
+        self._apply_spellcheck()
         if new.chat_on_top != old.chat_on_top:
             self.chat.apply_on_top(new.chat_on_top)
         if new.banter_every != old.banter_every:

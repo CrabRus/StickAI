@@ -30,8 +30,8 @@ from PySide6.QtGui import QImage
 
 from ..i18n import tr
 from .characters import LANGUAGES
-from ..desktop import control
-from ..desktop.files import Workspace
+from ..tools import control
+from ..tools.files import Workspace
 from .gemini import GeminiClient, GeminiResult
 from .memory import Entry, MemoryStore
 

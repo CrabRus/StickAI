@@ -15,9 +15,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QUrl
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimedia import QAudioDevice, QAudioOutput, QMediaDevices, QMediaPlayer
 
-from .desktop.win32 import Rect
+from ..desktop.win32 import Rect
 
 NOTE_COLORS = ["#FEC503", "#33CCFF", "#D91100", "#66CC00", "#FF8A3D", "#C77DFF"]
 NOTE_GLYPHS = ["♪", "♫", "♩", "♬"]
@@ -42,6 +42,44 @@ class Note:
     drift: float = field(default_factory=lambda: random.uniform(-0.4, 0.4))
 
 
+# How a device's name says what it is (English / Russian / Slovak Windows names).
+HEADPHONE_WORDS = ("headphone", "headset", "earphone", "earbud", "airpods", "buds", "hands-free", "handsfree",
+                   "наушник", "гарнитур", "slúchadl", "sluchadl")
+SPEAKER_WORDS = ("speaker", "динамик", "колонк", "reproduktor", "repro")
+
+AUTO_SPEAKERS = "auto-speakers"   # music_output value: speakers whenever headphones are the default
+
+
+def _is_headphones(dev: QAudioDevice) -> bool:
+    name = dev.description().lower()
+    return any(w in name for w in HEADPHONE_WORDS)
+
+
+def output_names() -> list[str]:
+    """Names of the audio outputs Windows has right now (for the settings list)."""
+    return [d.description() for d in QMediaDevices.audioOutputs()]
+
+
+def pick_output(mode: str) -> QAudioDevice:
+    """music_output -> the device to play on.
+      ""             Windows' default output
+      "auto-speakers" the default, unless it's headphones: then the first speakers found
+      anything else  that device by name (falls back to the default if it's gone)"""
+    default = QMediaDevices.defaultAudioOutput()
+    outs = QMediaDevices.audioOutputs()
+    if mode == AUTO_SPEAKERS:
+        if not _is_headphones(default):
+            return default
+        others = [d for d in outs if not _is_headphones(d) and d.id() != default.id()]
+        named = [d for d in others if any(w in d.description().lower() for w in SPEAKER_WORDS)]
+        return (named or others or [default])[0]
+    if mode:
+        for d in outs:
+            if d.description() == mode:
+                return d
+    return default
+
+
 class MusicShow:
     BOXES = 4
 
@@ -50,6 +88,8 @@ class MusicShow:
         self.player = QMediaPlayer()
         self.audio = QAudioOutput()
         self.player.setAudioOutput(self.audio)
+        self._devices = QMediaDevices()
+        self._devices.audioOutputsChanged.connect(self._route)  # headphones plugged in / out mid-show
         self.player.mediaStatusChanged.connect(self._status)
         self.performer = None
         self.boxes: list[Box] = []
@@ -93,8 +133,15 @@ class MusicShow:
         self.state, self.t0, self.box_i = "placing", now, 0
         s.talk(999)  # stand still for the show
         s.target_x = None
+        self._route()
         self.player.setSource(QUrl.fromLocalFile(str(p)))
         return ""
+
+    def _route(self) -> None:
+        """Send the song to the output chosen in Settings (e.g. speakers while you wear headphones)."""
+        dev = pick_output(getattr(self.app.roster.settings, "music_output", ""))
+        if dev.id() != self.audio.device().id():
+            self.audio.setDevice(dev)
 
     def stop(self) -> bool:
         if not self.running:

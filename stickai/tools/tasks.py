@@ -21,8 +21,9 @@ from ..ui.dialogs import StickDialog, ask_async
 
 from ..anim.mathutil import smoothstep
 from ..anim.stickman import State
-from ..desktop import aim, control, win32
-from ..desktop.files import Workspace, WorkspaceError
+from ..desktop import win32
+from . import aim, control
+from .files import Workspace, WorkspaceError
 from ..i18n import tr
 
 if TYPE_CHECKING:

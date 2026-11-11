@@ -35,11 +35,13 @@ Use the **tray icon** to talk, edit characters, toggle debug, pause, respawn and
      `setx GEMINI_API_KEY "your-key"`
    - or in a `secrets.toml` next to `characters.toml` (git-ignored; copy [secrets.example.toml](secrets.example.toml)):
      `gemini_api_key = "your-key"`
+   - **Backup keys (optional):** `backup_api_keys = ["key2"]` in `secrets.toml`. They're tried in order only when the key before is out of quota, rejected, or can't use any of the models; a key that ran out rests for 10 minutes. This doesn't make answers faster. It's useful for a paid key behind your free one. Keys from the same Google Cloud project share one quota, and Google's terms don't allow extra projects just to get around limits.
 3. Run the app and press **Alt+`** (or click the tray icon) to open the **chat window**, then type **hi yellow**. Yellow drops in and answers, both in the chat window and in a yellow speech bubble above his head. Click a bubble to dismiss it.
 
 The chat window:
 - **Messages:** Enter sends, Shift+Enter starts a new line. The window's X just hides it; Alt+` brings it back.
 - **Colours:** each character's messages are in their colour. "Red → Blue" means Red is talking to Blue.
+- **Spelling:** misspelled words get a red wavy underline. Right-click one for suggestions, *Add to dictionary* or *Ignore*. It uses the Windows spell checker, so it works for every language installed in Windows (English, Slovak, Russian, Ukrainian…) and even in mixed messages. Names of the characters are never flagged. Settings → General → *Check spelling in the chat box*.
 - **Pictures:** use the 📎 button, paste with **Ctrl+V**, or drag an image file onto the window. They see it (Gemini is multimodal) and remember what it showed.
 - **History:** the whole history is there, including earlier sessions, with a date line between sessions.
 
@@ -130,35 +132,58 @@ Python 3.12+ · PySide6 (Qt 6) for windows and QPainter rendering · ctypes for 
 
 ## Layout
 
+Grouped by what each part does:
+
 ```
 main.py                    entry point
+start.bat                  runs main.py with the project's .venv
 stickai/
-  app.py                   QApplication, frame + polling timers, tray, CLI
-  config.py                size, colors, poll rate
+  app.py                   wiring: QApplication, frame + polling timers, tray, CLI
+  config.py                size, colours, poll rate
+  i18n.py                  English / Russian / Slovak strings
+  world.py                 simulation container, fixed-substep physics
   overlay.py               per-monitor transparent click-through window
   render.py                QPainter drawing: stickman, debug outlines, HUD
-  world.py                 simulation container, fixed-substep physics
-  desktop/
-    win32.py               ctypes: EnumWindows, DWM bounds, monitors, styles
-    scene.py               windows -> walkable Platform segments
-  anim/
+
+  anim/                    HOW THEY MOVE
     mathutil.py            Vec, damping, 2-bone IK, Bezier helpers
     stickman.py            state machine + procedural pose + skeleton
-  brain/
-    characters.py          loads/validates characters.toml
-    gemini.py              REST client (stdlib, images, retries; worker thread -> Qt signal)
-    director.py            summoning, chat/banter/react/summary requests -> bubbles/actions
+
+  desktop/                 WHAT THEY SENSE (read-only)
+    win32.py               ctypes: EnumWindows, DWM bounds, monitors, styles
+    scene.py               windows -> walkable platforms and climbable walls
+    widgets.py             UI Automation: search bars, web-page elements to stand on
+    capture.py             fast GDI screen capture into numpy
+
+  brain/                   HOW THEY THINK AND REMEMBER
+    characters.py          loads / validates / saves characters.toml
+    gemini.py              REST client: models + backup keys, retries, worker thread
+    director.py            summoning, chat / banter / react / summary requests -> bubbles, actions, tasks
     memory.py              chat_log.jsonl + memory.json + images/
-  ui/
-    hotkey.py              RegisterHotKey + Qt native event filter
-    chatwindow.py          chat window: history, colours, pictures, ⚙ button
-    settings.py            settings window: general / characters / memory
-    dialogs.py             dark confirm / permission dialogs (replace QMessageBox)
-    theme.py               shared colours, dark title bars, dark tray menu
-  i18n.py                  English / Russian / Slovak strings
+
+  tools/                   WHAT THEY DO FOR YOU (each behind Allow / Deny)
+    tasks.py               TaskRunner: proposes, asks, then animates and runs a task
+    control.py             windows (close / minimize / restore), cursor glide, typing
+    files.py               sandboxed folder: create / write / open text files, backups
+    aim.py                 local target detector for click / aim games
+
+  activities/              SHOWS THEY PUT ON
+    music.py               music boxes + your song, output device choice
+    couch.py               couch time while you watch videos
+
+  ui/                      WINDOWS YOU SEE
+    chatwindow.py          chat: history, colours, pictures, ⚙ / ⏻ buttons
+    spellcheck.py          Windows spell checker in the chat box
+    settings.py            settings: general / characters / memory
     bubble.py              coloured speech bubble that follows a head
-characters.toml            your personalities & settings (created on first run, hot-reloaded, git-ignored)
-memory/                    created at runtime: what they remember
+    dialogs.py             dark confirm / permission dialogs
+    theme.py               shared colours, dark title bars, dark menus
+    hotkey.py              RegisterHotKey + Qt native event filter
+
+  defaults/
+    characters.default.toml  the shipped characters and settings
+characters.toml            yours (created on first run, hot-reloaded, git-ignored)
+memory/                    created at runtime: what they remember (git-ignored)
 ```
 
 ## How the stickmen know where windows are
@@ -279,7 +304,7 @@ Settings → General → **Let them close / open windows and type for you**. It'
 With **Let them close / open windows…** on, ask e.g. *"Red, play the aim game, click the targets until I say stop"*.
 
 1. **Gemini picks the game:** it chooses the game window. If it can see your screen, it also gives the target colour and where one target is; otherwise the colour is guessed locally (the most common vivid colour in the window).
-2. **You allow it once.** Then the chat window steps aside, the stickman leaps onto the game window and points, and a **local detector** ([desktop/aim.py](stickai/desktop/aim.py), numpy, on a background thread with GDI capture, so the UI never waits for a screenshot) does the work:
+2. **You allow it once.** Then the chat window steps aside, the stickman leaps onto the game window and points, and a **local detector** ([tools/aim.py](stickai/tools/aim.py), numpy, on a background thread with GDI capture, so the UI never waits for a screenshot) does the work:
    - it grabs the window's pixels, finds blobs of the target colour (about 12 ms) and clicks the nearest one with a quick cursor glide;
    - this repeats about 3–5 times a second, with no Gemini request per click.
 3. **Safety:**
@@ -289,16 +314,16 @@ With **Let them close / open windows…** on, ask e.g. *"Red, play the aim game,
 
 ## Music show
 
-Set a song in Settings → General → **Music for the show** (mp3, wav, ogg, flac, m4a) and its **Tempo (BPM)**. Then ask e.g. *"Green, play some music"*.
+Set a song in Settings → General → **Music for the show** (mp3, wav, ogg, flac, m4a) and its **Tempo (BPM)**. **Play music on** picks the output: Windows' default, a specific device, or **Speakers, even when I wear headphones**. With that one, if the default output is headphones or a headset (by its Windows name, e.g. "Headphones (… Buds)"), the song goes to your speakers instead, and it switches again if you plug or unplug headphones mid-show. Then ask e.g. *"Green, play some music"*.
 1. **Setting up:** Green sets out a row of four wooden music boxes, our own drawing, popping in one by one.
 2. **Playing:** your song starts, and on every beat Green strikes the next box. It flashes, a coloured ♪ floats up, and he bounces on every fourth beat.
 3. **Ending:** it ends with the song or when you say **stop**, and the boxes pack away.
 
-It's code in [music.py](stickai/music.py), using QtMultimedia for playback. Any character can do it, but Green loves it.
+It's code in [activities/music.py](stickai/activities/music.py), using QtMultimedia for playback. Any character can do it, but Green loves it.
 
 ## Couch time
 
-When you watch something, everybody on the desktop gathers on a sofa, drawn from behind ([couch.py](stickai/couch.py)).
+When you watch something, everybody on the desktop gathers on a sofa, drawn from behind ([activities/couch.py](stickai/activities/couch.py)).
 - **"Watching":** the active window is fullscreen, or its title looks like a video site or player (YouTube, Netflix, Twitch, VLC, mpv, Кинопоиск…), for 4 s in a row.
 - **From the chat:** "let's watch something together" starts it too, and it stays until you say **stop**. "Remove the couch" puts it away; it stays away until your next video. When you watch, they just watch with you and never offer to open or play things.
 - **The show:** a striped sofa fades in at the bottom-right of that screen. Everyone hops onto the seat, an app-made static platform, and sits. The sofa is drawn in front of them, so only heads and shoulders peek over its back.

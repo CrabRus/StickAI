@@ -157,7 +157,8 @@ class TargetFinder:
 
     def _run(self) -> None:
         import time
-        from . import capture, control
+        from ..desktop import capture
+        from . import control
         while not self._stop.is_set():
             with self._lock:
                 area, blacklist, own = self._area, self._blacklist, self._own

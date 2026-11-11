@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from ..brain.memory import Entry
 from ..i18n import language, tr
 from . import theme
+from . import spellcheck
 
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
@@ -132,6 +133,20 @@ class ChatInput(QPlainTextEdit):
         super().__init__()
         self.setFixedHeight(64)
         self.setTabChangesFocus(True)
+        self.spell = spellcheck.SpellHighlighter(self.document(), spellcheck.SpellChecker())
+
+    def contextMenuEvent(self, e) -> None:
+        menu = self.createStandardContextMenu(e.pos())
+        spellcheck.add_actions(menu, self, self.spell, e.pos(),
+                               {"add": tr("spell.add"), "ignore": tr("spell.ignore"), "none": tr("spell.none")})
+        menu.setStyleSheet(theme.MENU_STYLE)
+        menu.exec(e.globalPos())
+        menu.deleteLater()
+
+    def set_spellcheck(self, on: bool, names=()) -> None:
+        """Turn the red underlines on/off; never flag the characters' names."""
+        self.spell.checker.ignored.update(n.lower() for n in names)
+        self.spell.set_enabled(on)
 
     def keyPressEvent(self, e) -> None:
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not e.modifiers() & Qt.KeyboardModifier.ShiftModifier:

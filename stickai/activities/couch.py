@@ -13,9 +13,9 @@ import time
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 
-from .desktop.scene import Platform
-from .desktop.win32 import Rect
-from .i18n import tr
+from ..desktop.scene import Platform
+from ..desktop.win32 import Rect
+from ..i18n import tr
 
 COUCH = -7  # pseudo window handle of the seat platform (static, like the floor)
 VIDEO_WORDS = re.compile(

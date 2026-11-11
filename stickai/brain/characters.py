@@ -61,6 +61,7 @@ class Settings:
     summarize_every: int = 30
     memory_facts: int = 30
     chat_on_top: bool = True
+    spellcheck: bool = True      # red underlines + suggestions in the chat input (Windows spell checker)
     widgets: bool = True     # walk/sit on search bars & fields inside windows
     web_surfaces: bool = True   # also headings / images / buttons of web pages
     vision: str = "off"         # off | ask (when you ask / they want to look) | auto (also on their own)
@@ -71,6 +72,7 @@ class Settings:
     trust_files: bool = False    # ...without asking
     music_file: str = ""         # mp3 for the music show
     music_bpm: int = 110         # beats per minute: how often the boxes are struck
+    music_output: str = ""       # "" = Windows default, "auto-speakers", or an output device name
     couch: bool = True           # sit on a couch together when you watch videos
 
 
@@ -153,6 +155,7 @@ def load_roster(path: Path) -> Roster:
         summarize_every=int(_clamp(s.get("summarize_every", d.summarize_every), 6, 500, "summarize_every")),
         memory_facts=int(_clamp(s.get("memory_facts", d.memory_facts), 5, 200, "memory_facts")),
         chat_on_top=bool(s.get("chat_on_top", d.chat_on_top)),
+        spellcheck=bool(s.get("spellcheck", d.spellcheck)),
         widgets=bool(s.get("widgets", d.widgets)),
         web_surfaces=bool(s.get("web_surfaces", d.web_surfaces)),
         vision=_choice(s.get("vision", d.vision), VISION_MODES, "vision"),
@@ -163,6 +166,7 @@ def load_roster(path: Path) -> Roster:
         trust_files=bool(s.get("trust_files", d.trust_files)),
         music_file=str(s.get("music_file", d.music_file)),
         music_bpm=int(_clamp(s.get("music_bpm", d.music_bpm), 40, 240, "music_bpm")),
+        music_output=str(s.get("music_output", d.music_output)),
         couch=bool(s.get("couch", d.couch)),
     )
 
@@ -302,12 +306,18 @@ def save_roster(path: Path, roster: Roster) -> None:
         "# Music show (\"Green, play some music\"): the mp3 to play and its tempo.",
         f"music_file = {_str(s.music_file)}",
         f"music_bpm = {s.music_bpm}",
+        "# Where the song plays: \"\" = Windows default, \"auto-speakers\" = speakers whenever",
+        "# headphones are the default output, or an exact device name from Settings.",
+        f"music_output = {_str(s.music_output)}",
         "",
         "# When you watch something (fullscreen, YouTube, Netflix, VLC...), they gather on a couch.",
         f"couch = {str(s.couch).lower()}",
         "",
         "# Keep the chat window above other windows.",
         f"chat_on_top = {str(s.chat_on_top).lower()}",
+        "",
+        "# Underline misspelled words in the chat box (uses the Windows spell checker and its languages).",
+        f"spellcheck = {str(s.spellcheck).lower()}",
         "",
         "# Tell them which window each one is standing on (sends window titles to Google).",
         f"share_window_titles = {str(s.share_window_titles).lower()}",

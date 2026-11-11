@@ -53,6 +53,9 @@ memory_facts = 30
 # Keep the chat window above other windows.
 chat_on_top = true
 
+# Underline misspelled words in the chat box (uses the Windows spell checker and its languages).
+spellcheck = true
+
 # Tell them which window each one is standing on (sends window titles to Google).
 share_window_titles = false
 

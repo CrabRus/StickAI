@@ -1,0 +1,8 @@
+{
+  "cmd.explain": "Explain with StickAI",
+  "cmd.comment": "Add comments with StickAI",
+  "cmd.diagnose": "What's this error? (StickAI)",
+  "cmd.ask": "Ask StickAI about the code",
+  "cmd.showPanel": "Show the StickAI panel",
+  "cmd.reconnect": "Reconnect to StickAI"
+}

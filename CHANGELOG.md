@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+- Fixed: typing in the chat box could freeze the app for seconds ("Not responding"). The auto-growing box and its
+  scrollbar fed back into each other (scrollbar -> narrower -> re-wrap -> taller -> scrollbar...). Now there is no
+  scrollbar and the box is resized once per change.
+- **Work shows in the animation:** while a step runs they hold a prop:
+  - a laptop for the terminal, VS Code and the code helper;
+  - a magnifier for searching;
+  - a box for file operations;
+  - an envelope for mail;
+  - a map for Maps;
+  - a remote for YouTube and media.
+- **Landing animation:** a dip, a deep crouch or a three-point landing depending on the fall, with dust puffs.
+- **Fishing rod:**
+  - In peace, the stickmen reel themselves up onto window edges above, or hang from the top of the screen.
+  - In fights, they hook the opponent and yank him in, and run away up a window.
+  - The rod, the line (slack or taut) and the hook are drawn.
+- **Fights** («деритесь», "fight!", «Red, побей Blue»). The stickmen charge, punch, kick, do flying kicks, block,
+  get knocked back and run away, with hit sparks and kick swooshes. «хватит драться» or "stop" ends it, and the
+  winner celebrates. New poses: fighting stance, punch, kick, block, stagger, flying kick, knocked back.
+- The music show starts only when your message asks a character to play music (checked in code). It no longer
+  starts on its own when Green opens a YouTube video or does anything else.
+- **Browser skill:**
+  - YouTube: search, play the first video, your feeds;
+  - Gmail: inbox, unread, search, and compose a **draft** (you press Send);
+  - Google Maps: places and directions by car, on foot, by transit or by bike;
+  - tabs: list, switch, close;
+  - links: click one on the page;
+  - page text: read it when asked, with an opt-in setting.
+
+  Common phrases work as quick commands, with no AI request.
+- Step fields shared by several skills (query, to, from…) now describe every use, not just the first skill's.
+- **Creating files and folders** anywhere in your folders (`create_files`): empty files or files with text,
+  never over an existing name, always with Allow; "undo" moves only untouched new files to the Recycle Bin.
+- "Open folder CV6" finds a folder by name and opens it in one step. Found and opened folders tell the model
+  what's inside, so follow-ups like "3 more files like this one" work.
+- **Open in VS Code:** the stickmen open folders (projects) and single files in VS Code by name or path
+  ("открой проект StickAI в VS Code" works locally, with no AI request).
+- **Renaming:** one file or folder by an approximate name (`rename_path`), or many at once with a pattern
+  (`manage_files` op `rename`: `{n}`, `{name}`, `{date}`). Extensions are kept, names are never replaced,
+  it always asks, and "undo" puts the old names back.
+- **StickAI.exe** (launcher/build.py): starts StickAI without a console window. With no console, the log is written to
+  %LOCALAPPDATA%\StickAI\stickai.log. A second start only says StickAI is already running.
+- Alt+` brings back a chat window that was minimized with its title-bar button.
+- A character playing the music show no longer also presses play/pause, which paused your own player.
+- No placeholder text in the chat box or the VS Code question box.
+- **Code helper in VS Code:** a StickAI extension (vscode/, packed without Node.js) with four commands:
+  * **Explain** (Ctrl+Alt+E);
+  * **ask questions** in the panel (Ctrl+Alt+Q);
+  * **add comments** (Ctrl+Alt+C), shown as a diff to accept. Only comment changes are allowed; anything else gets a warning;
+  * **What's this error?** from the light bulb.
+
+  The chat understands "explain / comment / what's this error" while VS Code is in use.
+  The link is local only (127.0.0.1 + token).
 - **Files skill:** move / copy / delete (Recycle Bin) / list files by type, name and date
   ("move all today's PDFs from Downloads to Documents"), with a file list in the Allow dialog and undo.
 - Removed the Spotify-specific workarounds (spotify: links and Spotify prompt hints); Spotify gets its own skill later.

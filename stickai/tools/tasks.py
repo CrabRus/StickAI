@@ -69,6 +69,11 @@ KINDS = WINDOW_KINDS + ("type_text", "click_game", "click_button") + ASKS_IN_SCR
     + FLEX_KINDS
 MAX_STEPS = 6
 # after these the screen is different: they get one look at the result, to finish the job or fix it
+# What they hold while a skill step runs (see Stickman.PROPS): the work shows in the animation.
+STEP_PROPS = {"terminal": "laptop", "open_in_vscode": "laptop",
+              "find_path": "magnifier", "read_page": "magnifier", "click_link": "remote",
+              "manage_files": "box", "rename_path": "box", "create_files": "box", "undo_files": "box",
+              "gmail": "letter", "maps": "map", "youtube": "remote", "media": "remote", "browser_tabs": "remote"}
 LOOK_AFTER = ("open_url", "launch_app", "press_keys", "type_text", "click_button", "click_at", "scroll_page",
               "restore_window")
 MAX_CLIPBOARD = 20000
@@ -633,7 +638,18 @@ class TaskRunner(QObject):
             kind = spec["kind"]
 
             if spec.get("skill"):
-                yield from skills.owner(kind).run(self, s, spec)
+                prop = STEP_PROPS.get(kind, "")
+                if kind == "manage_files" and spec.get("op") == "list":
+                    prop = "magnifier"
+                t0 = s.time
+                if prop:
+                    s.talk(1.0)  # stop walking for it
+                    s.gesture, s.gesture_until = prop, s.time + 3600.0
+                try:
+                    yield from skills.owner(kind).run(self, s, spec)
+                finally:
+                    if prop and s.gesture == prop:  # keep it in view long enough to be seen
+                        s.gesture_until = max(t0 + 1.6, s.time + 0.7)
                 what = spec.get("done", what)
 
             elif kind == "restore_window":

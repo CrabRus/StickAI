@@ -189,7 +189,6 @@ class TerminalSkill(Skill):
             spec["done"] = tr("sk.term_opened", folder=self.folder or "")
             return
         before = len(buffer_text(hwnd))
-        s.gesture, s.gesture_until = "type", s.time + 0.03 * sum(map(len, lines)) + 2.0
         for line in lines:
             control.press_combo(["esc"])  # clear anything half-typed on the prompt
             for ch in line:
@@ -199,7 +198,6 @@ class TerminalSkill(Skill):
                 yield ("wait", 0.02)
             control.press_combo(["enter"])
             yield ("wait", 0.4)
-        s.gesture = ""
         # wait for the command to finish: the prompt is back at the end and the text stopped changing
         deadline, last, stable = time.monotonic() + OUTPUT_TIMEOUT, "", 0
         text = ""

@@ -235,6 +235,9 @@ class SettingsDialog(QDialog):
         self.control.toggled.connect(self.start_apps.setEnabled)
         self.read_fields.setStyleSheet("margin-left: 22px;")
         self.control.toggled.connect(self.read_fields.setEnabled)
+        self.read_pages = QCheckBox(tr("set.read_pages"))
+        self.read_pages.setStyleSheet("margin-left: 22px;")
+        self.control.toggled.connect(self.read_pages.setEnabled)
         self.clipboard = QCheckBox(tr("set.clipboard"))
         self.reminders = QCheckBox(tr("set.reminders"))
         self.apps = QPlainTextEdit()
@@ -262,7 +265,7 @@ class SettingsDialog(QDialog):
         self.spellcheck = QCheckBox(tr("set.spellcheck"))
         self.titles = QCheckBox(tr("set.titles"))
         for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.start_apps, self.read_fields,
-                   self.clipboard, self.reminders, self.files, self.trust_files):
+                   self.read_pages, self.clipboard, self.reminders, self.files, self.trust_files):
             form.addRow("", cb)
         form.addRow(tr("set.files_folder"), self._folder_row)
         fh = QLabel(tr("set.files_hint"))
@@ -285,6 +288,9 @@ class SettingsDialog(QDialog):
         self.couch = QCheckBox(tr("set.couch"))
         form.addRow("", self.couch)
         self.couch.toggled.connect(self._dirty)
+        self.vscode = QCheckBox(tr("set.vscode"))
+        form.addRow("", self.vscode)
+        self.vscode.toggled.connect(self._dirty)
         self.music_file = QLineEdit()
         mbrowse = QPushButton(tr("set.browse"))
         mbrowse.clicked.connect(self._browse_music)
@@ -328,7 +334,7 @@ class SettingsDialog(QDialog):
             w.currentIndexChanged.connect(self._dirty)
         for w in (self.banter, self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
                   self.trust_files, self.on_top, self.spellcheck, self.titles, self.read_fields, self.start_apps,
-                  self.clipboard,
+                  self.read_pages, self.clipboard,
                   self.reminders):
             w.toggled.connect(self._dirty)
         for w in (self.b_lo, self.b_hi):
@@ -503,6 +509,8 @@ class SettingsDialog(QDialog):
         self.trust.setEnabled(s.control)
         self.read_fields.setChecked(s.read_fields)
         self.read_fields.setEnabled(s.control)
+        self.read_pages.setChecked(s.read_pages)
+        self.read_pages.setEnabled(s.control)
         self.start_apps.setChecked(s.start_apps)
         self.start_apps.setEnabled(s.control)
         self.clipboard.setChecked(s.clipboard)
@@ -516,6 +524,7 @@ class SettingsDialog(QDialog):
         self.music_bpm.setValue(s.music_bpm)
         self._fill_outputs(s.music_output)
         self.couch.setChecked(s.couch)
+        self.vscode.setChecked(s.vscode)
         self.files_folder.setEnabled(s.files)
         self.vision.setCurrentIndex(max(0, self.vision.findData(s.vision)))
         self.on_top.setChecked(s.chat_on_top)
@@ -680,13 +689,14 @@ class SettingsDialog(QDialog):
             language=self.lang.currentData(), bubbles=self.bubbles.currentData(), banter=self.banter.isChecked(),
             banter_every=(max(30.0, lo), max(30.0, hi)), react_to_throws=self.react.isChecked(),
             greet_on_arrival=self.greet.isChecked(), read_fields=self.read_fields.isChecked(),
+            read_pages=self.read_pages.isChecked(),
             start_apps=self.start_apps.isChecked(),
             clipboard=self.clipboard.isChecked(), reminders=self.reminders.isChecked(), apps=self._apps_list(),
             chat_on_top=self.on_top.isChecked(), spellcheck=self.spellcheck.isChecked(), widgets=self.widgets.isChecked(), web_surfaces=self.web.isChecked(),
             vision=self.vision.currentData(), control=self.control.isChecked(), trust_windows=self.trust.isChecked(),
             files=self.files.isChecked(), trust_files=self.trust_files.isChecked(),
             files_folder=self.files_folder.text().strip(),
-            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), share_window_titles=self.titles.isChecked(),
+            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), vscode=self.vscode.isChecked(), share_window_titles=self.titles.isChecked(),
             hotkey=hotkey, hide_hotkey=hide_hotkey, models=models)
         try:
             save_roster(self.app.characters_path, self.draft)

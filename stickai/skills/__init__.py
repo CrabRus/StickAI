@@ -14,9 +14,12 @@ from .explorer import ExplorerSkill
 from .filemanager import FileManagerSkill
 from .system import SystemSkill
 from .terminal import TerminalSkill
+from .vscode import VSCodeSkill
+from .browser import BrowserSkill
 
 # order matters for quick(): the first skill that understands a message gets it
-SKILLS: list[Skill] = [ExplorerSkill(), FileManagerSkill(), TerminalSkill(), SystemSkill()]
+SKILLS: list[Skill] = [VSCodeSkill(), BrowserSkill(), ExplorerSkill(), FileManagerSkill(), TerminalSkill(),
+                       SystemSkill()]
 _OWNER = {kind: sk for sk in SKILLS for kind in sk.KINDS}
 
 FILLER = re.compile(r"^(?:(?:hey|hi|эй|слушай|ну|а|ahoj|hej|можешь|можете|could you|can you|please|пожалуйста|"
@@ -41,9 +44,17 @@ def schema_props(settings) -> dict:
     for sk in enabled(settings):
         for a in sk.actions(settings):
             for name, p in a.params.items():
-                if name in props:
+                text = p.description if p.description.startswith(a.kind) else f"{a.kind}: {p.description}"
+                if name in props:  # shared by several kinds ("query", "to"...): one description for all
+                    d = props[name]
+                    if d["type"] == p.type and text not in d["description"]:
+                        d["description"] += " | " + text
+                    if "enum" in d and p.enum:
+                        d["enum"] = list(dict.fromkeys(d["enum"] + list(p.enum)))
+                    elif "enum" in d:
+                        del d["enum"]
                     continue
-                d = {"type": p.type, "description": f"{a.kind}: {p.description}"}
+                d = {"type": p.type, "description": text}
                 if p.enum:
                     d["enum"] = list(p.enum)
                 props[name] = d

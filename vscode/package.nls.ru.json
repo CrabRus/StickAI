@@ -1,0 +1,8 @@
+{
+  "cmd.explain": "Объяснить со StickAI",
+  "cmd.comment": "Прокомментировать со StickAI",
+  "cmd.diagnose": "Что за ошибка? (StickAI)",
+  "cmd.ask": "Спросить StickAI про код",
+  "cmd.showPanel": "Показать панель StickAI",
+  "cmd.reconnect": "Переподключиться к StickAI"
+}

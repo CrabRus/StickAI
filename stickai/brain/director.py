@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("stickai.director")
 
 STOP_WORDS = ("stop", "enough", "quit", "стоп", "хватит", "остановись", "dosť", "prestaň", "stoj")
-ACTIONS = ("none", "wave", "jump", "run", "sit", "approach", "leave", "music", "watch", "remove_couch")
+ACTIONS = ("none", "wave", "jump", "run", "sit", "approach", "leave", "music", "watch", "remove_couch", "fight")
 MAX_IMAGE_SIDE = 1024
 # A message that mentions the clipboard (only then is it read, and only with the setting on).
 CLIPBOARD_WORDS = re.compile(
@@ -56,6 +56,19 @@ ACTION_WORDS = re.compile(
     r"напиши|отправь|поставь|прокрути|нажми|сделай|создай|переключи|зайди|верни|убей|заверши|"
     r"open|launch|start|play|find|search|google|close|hide|show|go to|type|write|send|click|press|scroll|run|"
     r"turn|switch|commit|push|pull|git|otvor|spusti|nájdi|zatvor|pusti|napíš|klikni|prepni)", re.IGNORECASE)
+# The music show (boxes + the user's song) only when the message itself asks a character to play
+# music. Models love to add it to anything ("open a YouTube video" -> music), so this is checked in code.
+MUSIC_ASK = re.compile(r"музык|сыграй|сыгра[ей]|поиграй|спой|песн|мелоди|music|play (?:us |me )?(?:a |some )?(?:song|tune)|"
+                       r"sing|song|hudb|zahraj|zaspievaj|pesni", re.IGNORECASE)
+# ...but "put on music on YouTube / Spotify" is the user's own player, not the show
+OTHER_PLAYER = re.compile(r"ютуб|youtube|you tube|spotify|спотиф|видео|video|плейлист|playlist|трек|track|radio|радио",
+                          re.IGNORECASE)
+# Fighting starts only when the message asks for it (checked in code, like the music show).
+FIGHT_ASK = re.compile(r"(?<!\w)(?:дерит|подерит|подерис|дерис|драк[аиу]|дратьс|подрат|в бой|бой\b|бейт|побей|бей(?!\w)|ударь|врежь|атакуй|attack|punch him|kick him|отпизд|"
+                       r"отлупи|вмаж|вломи|сразит|сражайт|fight|brawl|battle|beat (?:him|her|them|each other|up)|"
+                       r"bitk|pobi|bijte)", re.IGNORECASE)
+FIGHT_STOP = re.compile(r"(?:не|хватит|прекратите|прекрати|перестаньте|stop|no more|quit|prestaňte|dosť)\s+"
+                        r"(?:\w+\s+)?(?:дерит|драть|драк|бить|fight|bit)", re.IGNORECASE)
 NEW_WINDOW_WORDS = re.compile(r"new (browser |chrome |edge |firefox )?window|нов\w* окн|nov\w* okn", re.IGNORECASE)
 # Words that only call someone over. A message made of names + these is "just a summon"
 # (with greet_on_arrival off, nobody answers it).
@@ -133,10 +146,12 @@ class Director(QObject):
         if not text and image is None:
             return
         low = text.lower()
+        self._fight_stopped = False
         if any(re.search(rf"(?<!\w){w}(?!\w)", low) for w in STOP_WORDS):
             self.app.tasks.cancel()  # games and plans stop at once; they still get to answer below
             self.app.music.stop()
             self.app.couch.end()
+            self._fight_stopped = self.app.fight.stop()
         keys, group = self.mentioned(text)
         targets = list(self.roster.characters) if group and not keys else keys
 
@@ -151,12 +166,20 @@ class Director(QObject):
         self.message.emit(entry)
         self._last_user = time.monotonic()
         arrived = [k for k in targets if self.app.summon(k)]
+        job = self.app.code.wants(text) if image is None else None
+        if job:  # "explain this code" / "comment it" / "what's this error" while VS Code is in use
+            key = next(iter(targets), self.app.code.coder())  # whoever you named, else the coder
+            self.app.summon(key)
+            self.app.code.run_from_chat(job, key)
+            return
 
         present = self.app.present_keys()
         if not present:
             names = ", ".join(c.display_name for c in self.roster.characters.values())
             self.status.emit(tr("st.nobody", names=names))
             return
+        if image is None and self._quick_fight(text, [k for k in targets if k in present] or present):
+            return  # "fight!" / "хватит драться": done locally, no AI request
         if self._pending is not None:
             if self._pending["tag"] == "chat":
                 self._queued = (entry, payload)
@@ -524,12 +547,15 @@ Rules:
 - action: "wave" greeting/goodbye, "jump" excited or showing off, "run" restless or in a hurry,
   "sit" relaxed/tired/settling in for a chat, "approach" walk over to the character in "to",
   "leave" only when the user tells that character to go away or says goodbye to them,
-  "music" only when the user asks that character to play / perform music (sets out music boxes
-  and plays the user's song; Green loves doing it),
+  "music" ONLY when the user's message itself asks that character to play / perform music (sets out
+  music boxes and plays the user's song). Never as a reaction to anything else (opening videos, files...).
+  It needs NO steps: never add a media step with it,
   "watch" when the user is watching something or wants you to watch with them: everyone sits on the
   couch together. When the user watches something, just watch with them: never offer to open,
   play or control videos or windows for them,
-  "remove_couch" when the user asks to remove / put away the couch or to stop sitting on it, else "none".
+  "remove_couch" when the user asks to remove / put away the couch or to stop sitting on it,
+  "fight" ONLY when the user asks them to fight / have a brawl (set "to" to the opponent's key, or
+  "everyone"): they gather on the floor and fight for real with punches, kicks and blocks, else "none".
 - A character marked "just arrived" was summoned by this very message.{self._arrival_rule()}{self._capability_rules()}
 - Output JSON only."""
 
@@ -794,6 +820,12 @@ Rules:
                 action = r.get("action", "none")
                 replies.append((k, to, text, action if action in ACTIONS else "none"))
         replies = replies[: self.settings.max_replies]
+        if any(a == "fight" for *_r, a in replies) and not self._fight_asked(p):
+            log.info("dropped the fight: the user didn't ask for it")
+            replies = [(k, to, text, "none" if a == "fight" else a) for k, to, text, a in replies]
+        if any(a == "music" for *_r, a in replies) and not self._music_asked(p):
+            log.info("dropped the music show: the user didn't ask for it")
+            replies = [(k, to, text, "none" if a == "music" else a) for k, to, text, a in replies]
         log.info("%s %s -> %s", p["tag"], res.model, replies)
         if not replies and p["tag"] == "chat" and not data.get("look"):
             self.status.emit(tr("st.no_answer"))
@@ -823,6 +855,15 @@ Rules:
                     self.app.say(e.speaker, e.text, action, e.to)
             QTimer.singleShot(delay, show)
             delay += 900 + 30 * len(text)  # let each bubble be read a bit first
+        if task_from is not None and any(a in ("music", "watch") for _k, _t, _x, a in replies):
+            # They perform the music themselves (or sit down to watch): a play/pause key on top of
+            # that would pause the user's own player, so media toggles are dropped.
+            k, steps, cont = task_from
+            kept = [st for st in steps if not (isinstance(st, dict) and st.get("kind") == "media"
+                                               and st.get("media") in ("play_pause", "mute"))]
+            if len(kept) != len(steps):
+                log.info("dropped %d media step(s): the reply already plays music / watches", len(steps) - len(kept))
+            task_from = (k, kept, cont) if kept else None
         if task_from is not None:
             k, steps, cont = task_from
             self._plan_user_t = self._last_user  # a new message from you cancels the follow-up rounds
@@ -833,6 +874,52 @@ Rules:
                 and not p.get("looked") and p.get("entry") is not None):
             looker = replies[0][0] if replies else (p.get("addressed") or self.app.present_keys() or [""])[0]
             QTimer.singleShot(delay, lambda: self._look(p, looker))
+
+    def _fight_asked(self, p: dict) -> bool:
+        entry = p.get("entry")
+        return (p.get("tag") == "chat" and entry is not None and bool(entry.text)
+                and bool(FIGHT_ASK.search(entry.text)) and not FIGHT_STOP.search(entry.text))
+
+    def _quick_fight(self, text: str, who: list[str]) -> bool:
+        """"Fight!" / "Red, fight Blue" / "stop fighting": no AI request needed."""
+        cmd = self._command_text(text)
+        if FIGHT_STOP.search(text):
+            stopped_now = getattr(self, "_fight_stopped", False)
+            self._fight_stopped = False
+            if not self.app.fight.stop() and not stopped_now:
+                return False
+            key = who[0]
+            line = Entry("char", random.choice(tr("fight.ok_stop").split("|")), speaker=key, to="user")
+            self.memory.add(line)
+            self.message.emit(line)
+            self.app.say(key, line.text, "none")
+            return True
+        if not FIGHT_ASK.search(cmd) or len(re.findall(r"\w+", cmd)) > 5:
+            return False  # a longer message about fighting: the AI decides (action "fight")
+        present = self.app.present_keys()
+        keys = who if len(who) >= 2 else None  # two or more named: just them; else everybody
+        if not self.app.fight.start(keys):
+            return False
+        line = Entry("char", random.choice(tr("fight.go").split("|")), speaker=(keys or present)[0], to="everyone")
+        self.memory.add(line)
+        self.message.emit(line)
+        self.app.say(line.speaker, line.text, "none")
+        return True
+
+    def _music_asked(self, p: dict) -> bool:
+        """Did the user's own message ask for the music show (not YouTube / Spotify / a video)?
+        "Again!" right after asking for it counts too."""
+        entry = p.get("entry")
+        if entry is None or p.get("tag") != "chat" or not entry.text:
+            return False
+        if MUSIC_ASK.search(entry.text):
+            return not OTHER_PLAYER.search(entry.text)
+        if re.search(r"ещ[её] раз|повтори|снова|again|one more|znova|ešte raz", entry.text, re.IGNORECASE):
+            users = [e for e in self.memory.entries if e.kind == "user"]
+            i = next((n for n in range(len(users) - 1, -1, -1) if users[n] is entry), len(users))
+            prev = users[i - 1].text if i > 0 else ""
+            return bool(MUSIC_ASK.search(prev)) and not OTHER_PLAYER.search(prev)
+        return False
 
     def _look(self, p: dict, looker: str) -> None:
         if self._pending is not None or not looker:

@@ -1,0 +1,92 @@
+{
+  "name": "stickai",
+  "displayName": "StickAI",
+  "description": "Your desktop stickmen help with code: explain it, comment it, explain errors and answer questions in a side panel.",
+  "version": "0.2.0",
+  "publisher": "stickai",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "stickai.explain",
+        "title": "%cmd.explain%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.comment",
+        "title": "%cmd.comment%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.diagnose",
+        "title": "%cmd.diagnose%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.ask",
+        "title": "%cmd.ask%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.showPanel",
+        "title": "%cmd.showPanel%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.reconnect",
+        "title": "%cmd.reconnect%",
+        "category": "StickAI"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "stickai.explain",
+        "key": "ctrl+alt+e",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "stickai.comment",
+        "key": "ctrl+alt+c",
+        "when": "editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "stickai.ask",
+        "key": "ctrl+alt+q"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "stickai.explain",
+          "group": "1_stickai@1"
+        },
+        {
+          "command": "stickai.comment",
+          "group": "1_stickai@2",
+          "when": "!editorReadonly"
+        },
+        {
+          "command": "stickai.diagnose",
+          "group": "1_stickai@3"
+        },
+        {
+          "command": "stickai.ask",
+          "group": "1_stickai@4"
+        }
+      ]
+    }
+  }
+}

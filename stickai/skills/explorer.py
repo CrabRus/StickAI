@@ -178,6 +178,19 @@ def find(query: str, kind: str = "any") -> list[str]:
     return ranked[:10]
 
 
+def folder_listing(path: str, limit: int = 25) -> str:
+    """What's in a folder, for the model ("create 3 more files like this one" needs the names)."""
+    try:
+        entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except OSError:
+        return ""
+    names = [e.name + ("\\" if e.is_dir() else "") for e in entries if not e.name.startswith(".")]
+    if not names:
+        return "; the folder is empty"
+    more = f" … (+{len(names) - limit})" if len(names) > limit else ""
+    return "; it contains: " + ", ".join(names[:limit]) + more
+
+
 def reveal(path: str) -> None:
     """Explorer with the item selected (a folder: opened)."""
     if os.path.isdir(path):
@@ -224,7 +237,11 @@ class ExplorerSkill(Skill):
             raw = str(step.get("path") or step.get("text") or "").strip().strip('"')
             path = known_folder(raw) or (raw if os.path.isabs(raw) and os.path.isdir(raw) else None)
             if path is None:
-                raise Unusable(f"no folder {raw!r}: give a full path, a known name, or use find_path")
+                if not raw or os.path.isabs(raw):
+                    raise Unusable(f"no folder {raw!r}: give a full path, a known name, or a folder name")
+                name = raw.strip(" \"'«»")
+                return {"kind": "find_path", "skill": self.name, "query": name, "type": "folder", "open": False,
+                        "trusted": True, "what": tr("sk.find", query=name)}
             return {"kind": "open_folder", "skill": self.name, "path": path, "trusted": True,
                     "what": tr("sk.open_folder", path=path)}
         query = " ".join(str(step.get("query") or step.get("text") or "").split()).strip(" \"'«»")
@@ -240,11 +257,10 @@ class ExplorerSkill(Skill):
         if spec["kind"] == "open_folder":
             s.jump()
             subprocess.Popen(["explorer", spec["path"]])
+            spec["report"] = f"opened {spec['path']}" + folder_listing(spec["path"])
             return
-        s.gesture, s.gesture_until = "type", s.time + 3.0  # rummaging around
         box = background(lambda: find(spec["query"], spec["type"]))
         yield ("until", lambda: box.get("done", False), SCAN_SECONDS + 4)
-        s.gesture = ""
         hits = box.get("value") or []
         if not hits:
             raise TaskFailed(tr("sk.not_found", query=spec["query"]))
@@ -256,4 +272,5 @@ class ExplorerSkill(Skill):
         s.jump()
         spec["done"] = tr("sk.found", query=spec["query"], path=best)
         others = hits[1:5]
-        spec["report"] = f"showed {best}" + (f"; other matches: {'; '.join(others)}" if others else "")
+        spec["report"] = f"showed {best}" + (f"; other matches: {'; '.join(others)}" if others else "") + \
+            (folder_listing(best) if os.path.isdir(best) else "")

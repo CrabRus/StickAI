@@ -22,6 +22,7 @@ from .brain.characters import Roster, load_roster
 from .brain.director import Director
 from .tools.tasks import TaskRunner
 from .tools.reminders import ReminderBook
+from .coding.helper import CodeHelper
 from .tools.startapps import StartApps
 from .desktop import win32
 from .desktop.scene import DesktopScene
@@ -38,6 +39,7 @@ from .i18n import set_language, tr
 from .world import World
 from .activities.music import MusicShow
 from .activities.couch import COUCH, Couch
+from .activities.fight import Fight
 from .desktop.widgets import WidgetScanner
 
 log = logging.getLogger("stickai")
@@ -118,10 +120,12 @@ class StickApp:
         self.memory = MemoryStore(self.characters_path.parent / "memory")
         self.director = Director(self, self.characters_path.parent / "secrets.toml", self.memory)
         self.tasks = TaskRunner(self)
+        self.code = CodeHelper(self, self.characters_path.parent / "secrets.toml")  # VS Code link
         self.reminders = ReminderBook(self, self.characters_path.parent / "memory" / "reminders.json")
         self.start_apps = StartApps()  # the Start menu's apps, read in the background
         self.music = MusicShow(self)
         self.couch = Couch(self)
+        self.fight = Fight(self)
         self.chat = ChatWindow(self)
         self.chat.apply_on_top(self.roster.settings.chat_on_top)
         self._apply_spellcheck()
@@ -243,6 +247,10 @@ class StickApp:
         self.music.update()
         if mb is not None:
             dirty.append(mb)
+        fb = self.fight.bbox()
+        self.fight.update()
+        fb2 = self.fight.bbox()
+        dirty += [r for r in (fb, fb2) if r is not None]
         if self.music.error:
             self.director.note_event(tr(self.music.error))
             self.music.error = ""
@@ -468,6 +476,11 @@ class StickApp:
             self.couch.remove()
         elif action == "watch":
             self.couch.start(manual=True)
+        elif action == "fight":
+            pair = [key, to] if to in self.roster.characters and to != key else None
+            if pair:
+                self.summon(to)
+            self.fight.start(pair)
         elif action == "music":
             st = self.roster.settings
             err = self.music.start(s, st.music_file, st.music_bpm)
@@ -543,6 +556,8 @@ class StickApp:
             self._build_tray_menu()
         self._update_present()
         self._apply_spellcheck()
+        if (new.vscode, new.coder, new.language) != (old.vscode, old.coder, old.language):
+            self.code.apply_settings()
         if new.chat_on_top != old.chat_on_top:
             self.chat.apply_on_top(new.chat_on_top)
         if new.banter_every != old.banter_every:
@@ -747,6 +762,7 @@ class StickApp:
         self.hotkey.unregister()
         self.hide_hotkey.unregister()
         self.director.shutdown()
+        self.code.shutdown()
 
     # -------------------------------------------------------------- tray/UI
     def _build_tray(self) -> None:
@@ -855,8 +871,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
+def _message_box(text: str) -> None:
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(None, text, "StickAI", 0x40)  # MB_ICONINFORMATION
+
+
+def _setup_logging() -> None:
+    """Log to the console; without one (StickAI.exe / pythonw) to %LOCALAPPDATA%/StickAI/stickai.log."""
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    if sys.stderr is not None:
+        logging.basicConfig(level=logging.INFO, format=fmt, datefmt="%H:%M:%S")
+        return
+    from logging.handlers import RotatingFileHandler
+    folder = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "StickAI"
+    folder.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(folder / "stickai.log", maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+    logging.basicConfig(level=logging.INFO, format=fmt, datefmt="%Y-%m-%d %H:%M:%S", handlers=[handler])
+
+    def hook(kind, value, tb):  # crashes go to the log instead of a console nobody sees
+        logging.getLogger("stickai").critical("Unhandled error", exc_info=(kind, value, tb))
+    sys.excepthook = hook
+
+
+def _already_running() -> bool:
+    """A second StickAI would fight the first one over hotkeys and the VS Code link."""
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    global _MUTEX
+    _MUTEX = k32.CreateMutexW(None, False, r"Local\StickAI.single-instance")
+    return k32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+
+
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    _setup_logging()
+    args = parse_args(argv)
+    if args.exit_after is None and _already_running():
+        try:
+            set_language(load_roster(Path(args.characters)).settings.language)
+        except Exception:  # noqa: BLE001 - English is fine for this one message
+            pass
+        _message_box(tr("app.already_running"))
+        return 0
     signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl+C in the console quits
-    app = StickApp(parse_args(argv))
+    try:
+        app = StickApp(args)
+    except SystemExit as e:
+        if sys.stderr is None and e.code not in (0, None):
+            _message_box(str(e.code))
+        raise
     return app.run()

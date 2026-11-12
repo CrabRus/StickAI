@@ -14,7 +14,18 @@ python -m venv .venv
 start.bat
 ```
 
-(`start.bat` just runs `.venv\Scripts\python main.py`.) On the first run StickAI creates your own `characters.toml` from [stickai/defaults/characters.default.toml](stickai/defaults/characters.default.toml). It's git-ignored, like `secrets.toml` and the `memory/` folder, so your settings, key and chats never end up in the repository.
+**Without a console window:** build the launcher once:
+
+```
+.venv\Scripts\python launcheruild.py
+```
+
+Then start StickAI with **`StickAI.exe`** in the project folder. You can pin it to the taskbar or make a shortcut.
+It's a tiny program compiled with the C# compiler that comes with Windows, and it runs
+`.venv\Scripts\pythonw.exe main.py`. With no console, the log goes to `%LOCALAPPDATA%\StickAI\stickai.log`.
+Starting StickAI a second time just tells you it's already running.
+
+(`start.bat` just runs `.venv\Scripts\python main.py` with a console, which is handy for watching the log.) On the first run StickAI creates your own `characters.toml` from [stickai/defaults/characters.default.toml](stickai/defaults/characters.default.toml). It's git-ignored, like `secrets.toml` and the `memory/` folder, so your settings, key and chats never end up in the repository.
 
 Options:
 - `--debug`: show window outlines and the HUD at start. They're off by default because they cost frame time; the tray menu toggles them.
@@ -166,8 +177,17 @@ stickai/
     base.py                Skill / Action / Unusable, helpers
     system.py              media keys, close / force-close / hide / show apps by name
     explorer.py            find files and folders (search index + walk), open folders
-    filemanager.py         move / copy / delete (Recycle Bin) / list files by type, name, date; undo
+    filemanager.py         move / copy / delete (Recycle Bin) / list / rename / create files; undo
+    vscode.py              open folders (projects) and files in VS Code
+    browser.py             YouTube / Gmail (drafts) / Maps links, browser tabs, page text, links on the page
     terminal.py            their own terminal window: folders and Git, with the rules above
+
+  coding/                  CODE HELPER (VS Code)
+    bridge.py              local link with the extension: 127.0.0.1 + secret token, one JSON per line
+    stream.py              streamed Markdown replies from Gemini (shown while being written)
+    helper.py              explain requests -> prompt -> stream -> the extension's panel; "explain this code" in chat
+
+  launcher/                StickAI.cs + build.py -> StickAI.exe (starts pythonw, no console)
 
   tools/                   THE MACHINERY BEHIND THEM (each action behind Allow / Deny)
     tasks.py               TaskRunner: proposes, asks, then animates and runs a task
@@ -180,6 +200,7 @@ stickai/
 
   activities/              SHOWS THEY PUT ON
     music.py               music boxes + your song, output device choice
+    fight.py               fights: charge, punch, kick, flying kick, block, knock back, run away
     couch.py               couch time while you watch videos
 
   ui/                      WINDOWS YOU SEE
@@ -320,8 +341,10 @@ What they can do is organised in **skills** ([stickai/skills/](stickai/skills/))
 | skill | quick commands (EN / RU / SK) | what the AI can ask for |
 |---|---|---|
 | **System** | "pause", "next track", "louder", "mute", "close Telegram", "kill calculator" (Russian: «убей калькулятор»), "hide Chrome", "show Spotify", "open Steam" | `media` (global media keys: any player, no window needed), `close_app` (all windows of an app; `force` kills it and asks first), `hide_app`, `show_app` |
-| **Explorer** | "open downloads", "find folder StickAI", "where is my file main.py" | `find_path` (Windows Search index first, then a quick walk of your folders and drives; shows the item in Explorer, opens documents if asked but never programs), `open_folder` |
-| **Files** | "undo" / «отмени» (puts the last move or copy back) | `manage_files`: **move / copy / delete / list** your files in a folder, filtered by type ("pdf", "jpg,png" or categories: images, documents, video, audio, archives), part of the name, and date (today, yesterday, this week, last 7 days, this month…), or "only the N newest"; destination may be a new subfolder ("documents/PDF"). "Move all today's PDFs from Downloads to Documents" is one step. The Allow dialog lists the files; delete goes to the **Recycle Bin** only; nothing is overwritten (`a (1).pdf`); max 500 files at once; `undo_files` |
+| **Explorer** | "open downloads", "find folder StickAI", "where is my file main.py" | `find_path` (Windows Search index first, then a quick walk of your folders and drives; shows the item in Explorer, opens documents if asked but never programs), `open_folder` (a folder name works too: "open folder CV6" finds it and opens it in one step) |
+| **Browser** | «включи на ютубе lofi», «найди на ютубе …», «открой почту», «проверь почту», «найди в почте …», «покажи на карте …», «маршрут от A до B пешком», «как добраться до …», «закрой / переключись на вкладку …», «какие вкладки открыты», «перескажи страницу» | `youtube` (search; **play** the first video, picked from the results page with no API key; home / subscriptions / history / watch later), `gmail` (inbox, unread, search, **compose a draft**: it never sends, you press Send), `maps` (find a place; directions by car, on foot, by transit or by bike), `browser_tabs` (list / switch / close by part of the title, in the front Chrome / Edge / Brave window), `click_link` (a link or button on the page, by its text; asks first), `read_page` (the page's text, only with Settings → "read the web page" on). Services open as plain addresses in your default browser, so they don't depend on clicking around their interface |
+| **VS Code** | "open StickAI in VS Code", «открой файл main.py в vscode» | `open_in_vscode`: opens a folder (project) or one file in VS Code. Give a full path, a known folder, or a name; the name is looked up like `find_path`, and a folder beats a file of the same name. Nothing runs, so it doesn't ask |
+| **Files** | "undo" / «отмени» (puts the last move, copy, rename or creation back) | `create_files`: new files (empty, or with text) or folders in any of your folders. Typical request: "create 3 more files like this one, with the next numbers". A found or opened folder tells the model what's inside, so it can continue the names. Never over an existing name; always asks; "undo" moves only the new files you haven't changed to the Recycle Bin. `rename_path`: renames **one** file or folder found by an approximate name ("rename the CV6 assignment in downloads to ML task 6"). The extension is kept, and an existing name is never replaced. If several files match, it doesn't guess. Always asks. `manage_files`: **move / copy / delete / list / rename** your files in a folder, filtered by type ("pdf", "jpg,png" or categories: images, documents, video, audio, archives), part of the name, and date (today, yesterday, this week, last 7 days, this month…), or "only the N newest"; destination may be a new subfolder ("documents/PDF"). Rename many at once with a pattern: `{n}` is a number (oldest first), `{name}` the old name, `{date}` its date ("number today's screenshots: Project 1, 2…", "add ML_ to all PDFs"). "Move all today's PDFs from Downloads to Documents" is one step. The Allow dialog lists the files; delete goes to the **Recycle Bin** only; nothing is overwritten (`a (1).pdf`); max 500 files at once; `undo_files` |
 | **Terminal** | (none: the AI picks the command) | `terminal`: their **own** "StickAI terminal" window (never yours), `cd` by folder name, `dir`, `git status / log / diff / branch / show / fetch` at once; `git pull / checkout / switch / add / commit / push / stash`, `mkdir` only after Allow; forced/destructive options, chaining, pipes and everything else are refused. The output is read back so they can tell you what it says |
 
 Apps are understood by their everyday names in any of the three languages ("телеграм", "хром", "проводник", "калькулятор"), and Store apps (Calculator, Settings…) are handled properly: force-closing one never touches the shared host the other Store apps run in.
@@ -366,6 +389,42 @@ All of these come only from replies to *your* message, one at a time, and show u
 
 If the chat window is in the way of what they're clicking, scrolling or checking, it steps aside and comes back when they're done.
 
+## Code helper in VS Code
+
+Yellow (or whoever `coder` names in `characters.toml`) helps with code in a VS Code side panel. Answers
+appear while they're being written. Install the extension from the `vscode/` folder. No Node.js is needed:
+
+```
+python vscode/build.py --install
+```
+
+| what | how | chat (while VS Code is in use) |
+|---|---|---|
+| **Explain** | select code, **Ctrl+Alt+E** | "explain this code" / «объясни этот код» |
+| **Ask** | the box at the bottom of the panel, or **Ctrl+Alt+Q** | (use the panel) |
+| **Comment** | **Ctrl+Alt+C** | "add comments" / «прокомментируй функцию» |
+| **What's this error?** | the light bulb on an error, or right-click | "what's this error" / «что за ошибка?» |
+
+All four commands are also in the editor's right-click menu.
+
+* **Nothing selected:** the function or class under the cursor is used, otherwise the whole file.
+* **Ask** continues a thread about the code you explained or selected, and remembers the last few answers.
+  Selecting new code before asking switches to it.
+* **Comment** adds docstrings and doc comments in the language's own style (Python docstrings, JSDoc, Javadoc,
+  `///`…), plus inline comments only where the logic isn't obvious. The comments use the language the file's
+  existing comments are in, otherwise English.
+  * The result opens as a **diff**. Nothing changes until you press **Accept**, and Ctrl+Z undoes it.
+  * StickAI checks that only comments changed. If anything else changed, the panel warns you.
+  * If you edited the code in the meantime, Accept refuses.
+* **What's this error?** takes the errors and warnings VS Code reports near the cursor, with the code around
+  them. It explains the cause, points at the line and shows a fix.
+* **In the panel:** line references (`L12`) jump to that line, and code blocks have a Copy button.
+* **Privacy:**
+  * The link is local only: `127.0.0.1` plus a secret token in `%LOCALAPPDATA%\StickAI\vscode.json`.
+  * Code goes to Gemini only when you ask.
+  * In the background the extension shares only the file name, the language and the selected line numbers.
+  * Settings → "Code helper in VS Code" turns it off.
+
 ## Playing click / aim games
 
 With **Let them close / open windows…** on, ask e.g. *"Red, play the aim game, click the targets until I say stop"*.
@@ -387,6 +446,33 @@ Set a song in Settings → General → **Music for the show** (mp3, wav, ogg, fl
 3. **Ending:** it ends with the song or when you say **stop**, and the boxes pack away.
 
 It's code in [activities/music.py](stickai/activities/music.py), using QtMultimedia for playback. Any character can do it, but Green loves it.
+
+## Fights
+
+"Guys, fight!", «деритесь», «Red, побей Blue» start a fight. These short commands are handled locally, with no AI request.
+"Stop" or «хватит драться» ends it; otherwise it ends after about 30 seconds and the winner jumps and waves.
+
+- They jump down onto one floor and pair up with whoever is nearest.
+- They charge in at a run, or leap in with a **flying kick**.
+- Up close they **punch** (jab, cross, combos) and **kick**. The one attacked may **block**, and a blocked hit only pushes him back.
+- A clean punch staggers; a kick or a flying kick knocks him off his feet.
+- After a few hits they may **run away** for a moment (sometimes up a window with the fishing rod), then come back.
+- From a distance they may **hook the opponent with the fishing rod** and yank him in.
+- Who is aggressive and who blocks or runs comes from `energy` in the character sheet.
+- Hits flash yellow, blocks flash blue, and kicks leave a swoosh. All of it is local animation.
+- The AI can also start a fight (action `fight`), but only when your message asks for one: that's checked in code.
+
+## Fishing rod
+
+Each stickman carries a fishing rod: the rod, the line and a hook are drawn while he uses it.
+
+- **Getting around:** now and then (more often for energetic ones) one casts the hook at a window edge above
+  (up to about 9 body heights up), reels himself up and steps onto the window. With nothing to hook, he hooks
+  the top of the screen, hangs there swinging for a moment and drops.
+- **In a fight:** from a few steps away he hooks the opponent and yanks him over (off his feet) into a punch.
+  A raised block knocks the hook away. When a fighter runs away, he may reel himself up onto a window.
+  The other one then jumps up after him.
+- If you grab him with the mouse, or he gets hit while casting, he drops the rod.
 
 ## Couch time
 
@@ -443,6 +529,22 @@ Details:
 - **Spontaneous behaviour**: `energy` and `restlessness` set how often they pause, sit, sprint or hop.
 - **Turning**: knee and elbow bend direction follows a smoothed facing value, so the limbs swing through instead of snapping.
 - **Landing squash**: an under-damped spring gives one soft bounce.
+- **Landing**: the pose depends on how hard they hit the ground, and dust puffs roll out from the feet.
+  - A small hop: a quick dip.
+  - A big jump or a fall from a window: a deep crouch with arms out for balance.
+  - A long fall or being thrown: a three-point "superhero" landing (deep squat, a fist on the floor, the other
+    arm back), then they slowly rise.
+- **Doing a task shows**: while a step runs, they stop and hold something that says what they're doing. They
+  hold it at least long enough to be seen:
+
+  | Prop | What they're doing |
+  |---|---|
+  | laptop (typing; the screen glows) | terminal, VS Code, the code helper |
+  | magnifier | searching, reading a page, listing files |
+  | box | moving, copying, renaming or creating files |
+  | envelope | e-mail |
+  | map | Google Maps |
+  | remote | YouTube, media keys, tabs |
 - **Physics**: runs in ≤4 ms substeps, so behavior is independent of the frame rate.
 
 ## Roadmap
@@ -458,7 +560,7 @@ Details:
 
 ## Privacy
 
-Everything runs on your PC. Only what's needed for a reply is sent to Google Gemini with your own API key: the chat, character sheets and memory, and, only if you turn them on, window titles, screenshots and files from their folder. Nothing is sent anywhere else.
+Everything runs on your PC. Only what's needed for a reply is sent to Google Gemini with your own API key: the chat, character sheets and memory, and, only if you turn them on, window titles, screenshots and files from their folder. If you turn on "read the web page", the text of the page you ask about is sent too, only for that request. "Play … on YouTube" looks up the search on youtube.com (as opening the search page would) to pick the first video. Nothing is sent anywhere else.
 
 ## License
 

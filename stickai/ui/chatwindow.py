@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QRectF, QLocale, QMimeData, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QDateTime, QEvent, QRectF, QLocale, QMimeData, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QFrame, QSizePolicy, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QScrollArea, QToolButton,
@@ -39,13 +39,14 @@ QLabel#Event { color: #8d929c; font: italic 8.5pt 'Segoe UI'; }
 QLabel#Status { color: #a8adb7; font: 9pt 'Segoe UI'; padding: 0 4px; }
 QLabel#Present { color: #c9ccd2; font: 9pt 'Segoe UI'; }
 QPlainTextEdit { background: #2a2e36; color: #f2f2f2; border: 1px solid #3a3f4a; border-radius: 10px;
-                 padding: 6px 8px; font: 10.5pt 'Segoe UI'; selection-background-color: #FEC503; }
+                 padding: 7px 8px; font: 10.5pt 'Segoe UI'; selection-background-color: #FEC503; }
 QPlainTextEdit:focus { border: 1px solid #6b7180; }
 QPushButton#Send { background: #FEC503; color: #1b1b1b; border: none; border-radius: 10px;
-                   font: bold 10pt 'Segoe UI'; padding: 8px 14px; }
+                   font: bold 10pt 'Segoe UI'; padding: 0 16px; }
 QPushButton#Send:hover { background: #ffd43b; }
 QToolButton { background: #2a2e36; color: #e9e9ea; border: 1px solid #3a3f4a; border-radius: 10px;
               font: 13pt 'Segoe UI Emoji'; padding: 4px 8px; }
+QToolButton#Row { padding: 0; }
 QToolButton:hover { background: #343944; }
 QToolButton#Quit { color: #ff8a80; }
 QToolButton#Quit:hover { background: #5a2a2a; }
@@ -125,14 +126,27 @@ class MessageBubble(QWidget):
         QGuiApplication.clipboard().setText(self.text)
 
 
+ROW_H = 40       # height of the input row: buttons and a one-line input box line up
+MAX_INPUT_LINES = 6
+
+
 class ChatInput(QPlainTextEdit):
+    """One line high like the buttons next to it; grows with the text (up to a few lines)."""
     send = Signal()
     image_pasted = Signal(QImage)
 
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(64)
         self.setTabChangesFocus(True)
+        # No scrollbar ever: one appearing / disappearing changes the width, which re-wraps the text,
+        # which changes the height... a feedback loop that froze the chat while typing. The box still
+        # scrolls to the cursor (and with the wheel) past MAX_INPUT_LINES.
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(2)
+        self._fit_pending = False
+        self.document().documentLayout().documentSizeChanged.connect(lambda _s: self._fit_later())
+        self.setFixedHeight(ROW_H)
         self.spell = spellcheck.SpellHighlighter(self.document(), spellcheck.SpellChecker())
 
     def contextMenuEvent(self, e) -> None:
@@ -142,6 +156,25 @@ class ChatInput(QPlainTextEdit):
         menu.setStyleSheet(theme.MENU_STYLE)
         menu.exec(e.globalPos())
         menu.deleteLater()
+
+    def _fit_later(self) -> None:
+        """Coalesce: many size changes in one burst (pasting, typing fast) -> one fit, after layout."""
+        if not self._fit_pending:
+            self._fit_pending = True
+            QTimer.singleShot(0, self._fit)
+
+    def _fit(self) -> None:
+        self._fit_pending = False
+        lines = max(1, min(MAX_INPUT_LINES, int(self.document().documentLayout().documentSize().height())))
+        extra = ROW_H - self.fontMetrics().lineSpacing()  # frame + padding + margins around one line
+        want = max(ROW_H, lines * self.fontMetrics().lineSpacing() + extra)
+        if want != self.height():  # resizing relayouts the whole chat window: only when it really changes
+            self.setFixedHeight(want)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        if e.oldSize().width() != e.size().width():
+            self._fit_later()  # a narrower window wraps more lines (a height change can't loop back here)
 
     def set_spellcheck(self, on: bool, names=()) -> None:
         """Turn the red underlines on/off; never flag the characters' names."""
@@ -245,6 +278,10 @@ class ChatWindow(QWidget):
         self.send_btn = QPushButton()
         self.send_btn.setObjectName("Send")
         self.send_btn.clicked.connect(self._send)
+        for b in (self.look_btn, self.clip):
+            b.setObjectName("Row")
+            b.setFixedSize(ROW_H + 6, ROW_H)
+        self.send_btn.setFixedHeight(ROW_H)
         row = QHBoxLayout()
         row.setSpacing(6)
         row.addWidget(self.clip, 0, Qt.AlignmentFlag.AlignBottom)
@@ -270,7 +307,6 @@ class ChatWindow(QWidget):
 
     def retranslate(self) -> None:
         self.setWindowTitle(tr("chat.title"))
-        self.input.setPlaceholderText(tr("chat.placeholder"))
         self.send_btn.setText(tr("chat.send"))
         self.clip.setToolTip(tr("chat.attach_tip"))
         self.look_btn.setToolTip(tr("chat.look_tip"))
@@ -284,6 +320,17 @@ class ChatWindow(QWidget):
         theme.dark_title_bar(self)  # re-applied: changing window flags recreates the native window
         super().showEvent(e)
 
+    def changeEvent(self, e) -> None:
+        # The title-bar "minimize" hides the chat like the X does: a minimized chat would stay in
+        # the taskbar and Alt+` would "show" it while it's still minimized (invisible).
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            QTimer.singleShot(0, self._hide_unminimized)
+
+    def _hide_unminimized(self) -> None:
+        self.hide()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+
     def apply_on_top(self, on_top: bool) -> None:
         was = self.isVisible()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
@@ -291,7 +338,7 @@ class ChatWindow(QWidget):
             self.show()
 
     def toggle(self) -> None:
-        if self.isVisible() and self.isActiveWindow():
+        if self.isVisible() and self.isActiveWindow() and not self.isMinimized():
             self.hide()
         else:
             self.summon()
@@ -302,6 +349,9 @@ class ChatWindow(QWidget):
             if not getattr(self, "_placed", False):
                 self.move(geo.right() - self.width() - 24, geo.bottom() - self.height() - 24)
                 self._placed = True
+        if self.isMinimized():  # minimized with the title-bar button: un-minimize, don't just "show"
+            self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+            ctypes.windll.user32.ShowWindow(int(self.winId()), 9)  # SW_RESTORE
         self.show()
         self.raise_()
         self.activateWindow()

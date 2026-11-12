@@ -23,3 +23,8 @@ memory/
 Thumbs.db
 desktop.ini
 *.lnk
+vscode/stickai.vsix
+
+# Built locally (launcher/build.py)
+StickAI.exe
+launcher/stickai.ico

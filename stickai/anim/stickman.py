@@ -57,6 +57,12 @@ RUN_FACTOR = 2.4        # running top speed = walk_speed * this
 RUN_ACCEL = 7.0         # h/s^2
 JUMP_UP = 5.2           # h/s     take-off speed of a deliberate jump
 JUMP_PREP_TIME = 0.17   # s       anticipation crouch before a jump
+# fishing rod: cast the hook at an edge above (or the top of the screen) and reel yourself up
+ROD_LEN = 0.55          # h       rod length
+HOOK_SPEED = 16.0       # h/s     the hook flying out
+REEL_SPEED = 8.5        # h/s     top speed reeling in
+ROD_WINDUP = 0.22       # s       rod swings back over the shoulder before the cast
+ROD_RANGE = 9.0         # h       the farthest edge worth hooking
 
 
 class State(Enum):
@@ -73,11 +79,16 @@ class State(Enum):
     SITTING = auto()
     JUMP_PREP = auto()
     HOP = auto()        # aimed jump onto a widget (search bar...)
+    GRAPPLE = auto()    # fishing rod: casting, reeling up, hanging
 
 
 GROUND_STATES = frozenset({State.LANDING, State.IDLE, State.WALKING, State.TURNING,
                            State.SITTING, State.JUMP_PREP})
 CLIMB_STATES = frozenset({State.CLIMB_PREP, State.CLIMB_JUMP, State.CLIMBING, State.MANTLE})
+
+# Things they hold while doing a task (drawn by render.py): what they're doing shows at a glance.
+PROPS = frozenset({"laptop", "magnifier", "box", "letter", "map", "remote"})
+DUST_TIME = 0.55   # s   a landing's dust puff
 
 # Limb names -> (root, middle, end) joint keys; index 0 is the far side.
 LIMBS = (("arm0", "shoulder", "elbow0", "hand0"), ("leg0", "hip", "knee0", "foot0"),
@@ -111,6 +122,29 @@ class Stickman:
         self.leaving = False       # jumping off the top of the screen for good
         self.target_x: float | None = None  # walking over to someone
         self.target_until = 0.0
+        # fighting (driven by activities/fight.py): a stance + one move at a time
+        self.fighting = False      # in a fight: fists up, no wandering off on his own
+        self.fight_move = ""       # punch | kick | block | hit | jump_kick | ""
+        self.fight_t0 = 0.0
+        self.fight_dur = 0.0
+        self.fight_arm = 1         # which fist punches (alternates: jab, cross)
+        self.shove = 0.0           # h/s, a slide along the ground (pushed back by a blocked hit)
+        # landing: how hard (0..1) and how long the recovery takes; dust puffs [(x, y, t0, dir, size)]
+        self.land_impact = 0.0
+        self.land_time = 0.45
+        self.dust: list[tuple[float, float, float, int, float]] = []
+        # fishing rod (drawn by render.py while rod_on): hook position and how the line looks
+        self.rod_on = False
+        self.hook = Vec(x, y)
+        self.hook_taut = False
+        self.rod_grip = Vec()      # where the hands hold it (set by the pose)
+        self.grapple_mode = ""     # climb (onto a platform) | hang (from the screen top)
+        self.grapple_plat: Platform | None = None
+        self.anchor_pt = Vec()
+        self.reel_from = Vec()
+        self.reel_time = 0.5
+        self.hang_until = 0.0
+        self.rod_cooldown = 0.0
 
         self.pos = Vec(x, y)
         self.vel = Vec()
@@ -185,6 +219,9 @@ class Stickman:
         return self.state in GROUND_STATES
 
     def set_state(self, state: State) -> None:
+        if self.state == State.GRAPPLE and state != State.GRAPPLE:
+            self.rod_on = self.hook_taut = False  # whatever ended the grapple, the rod goes away
+            self.hang_until = 0.0
         self.state = state
         self.state_time = 0.0
         if state == State.TURNING:
@@ -205,6 +242,14 @@ class Stickman:
     def land(self, p: Platform) -> None:
         self.jumping = False
         impact = clamp(self.vel.y / (self.h * 9.0), 0.12, 1.0)
+        self.land_impact = clamp(self.vel.y / (self.h * 13.0), 0.0, 1.0)  # the landing pose's scale
+        # light hop: a quick dip; a big jump: deep crouch; a long fall / a throw: on one knee
+        li = self.land_impact
+        self.land_time = 0.35 + 0.6 * clamp((li - 0.3) / 0.6, 0.0, 1.0)
+        if li > 0.3 and self.state != State.DRAGGED:
+            size = 0.4 + li
+            self.dust = [d for d in self.dust if self.time - d[2] < DUST_TIME]
+            self.dust += [(self.pos.x, p.y, self.time, -1, size), (self.pos.x, p.y, self.time, 1, size)]
         self.pos.y = p.y
         self._detach()
         self.support = p
@@ -287,6 +332,71 @@ class Stickman:
         self.sit_until = self.time + seconds
         self.set_state(State.SITTING)
 
+    def grapple_to(self, anchor: Vec, plat: Platform | None) -> bool:
+        """Cast the rod at `anchor`: onto platform `plat` (pulled up onto it), or, with no
+        platform, hang from that point (the top of the screen) for a moment."""
+        if self.state in (State.DRAGGED, State.GRAPPLE) or self.state in CLIMB_STATES or self.leaving:
+            return False
+        self.grapple_mode = "climb" if plat is not None else "hang"
+        self.grapple_plat = plat
+        self.anchor_pt = anchor.copy()
+        self.facing = 1 if anchor.x >= self.pos.x else -1
+        self.target_x = None
+        self.running = False
+        self.gesture = ""
+        self.rod_on = True
+        self.hook_taut = False
+        self.rod_grip = self.joints.get("hand1", self.pos + Vec(0, -0.6 * self.h)).copy()
+        self.hook = self.rod_grip.copy()
+        self._detach()
+        self.set_state(State.GRAPPLE)
+        return True
+
+    def try_grapple(self, scene: "DesktopScene", up_only: bool = False) -> bool:
+        """Look for something above worth hooking: a window edge, else the top of the screen."""
+        if self.time < self.rod_cooldown:
+            return False
+        h, x, y = self.h, self.pos.x, self.pos.y
+        here = self.support
+        options = []
+        for p in scene.platforms:
+            if p.is_floor or p.widget or (here is not None and p == here) or p.x1 - p.x0 < 0.8 * h:
+                continue
+            dy = y - p.y
+            if not 1.4 * h <= dy <= ROD_RANGE * h:
+                continue
+            lx = clamp(x + random.uniform(-2.5, 2.5) * h, p.x0 + 0.35 * h, p.x1 - 0.35 * h)
+            if abs(lx - x) <= 5.0 * h:
+                options.append((p, lx))
+        self.rod_cooldown = self.time + 6.0
+        if options:
+            p, lx = random.choice(options)
+            return self.grapple_to(Vec(lx, p.y), p)
+        if up_only:
+            return False
+        mon = next((m for m in scene.monitors if m.work.contains(x, y - 2)), None)
+        if mon is not None and 2.5 * h <= y - mon.work.top <= ROD_RANGE * 1.3 * h:
+            ax = clamp(x + random.uniform(-1.5, 1.5) * h, mon.work.left + h, mon.work.right - h)
+            return self.grapple_to(Vec(ax, mon.work.top), None)
+        return False
+
+    def drop_rod(self) -> None:
+        self.rod_on = False
+        self.hook_taut = False
+
+    def fight_do(self, move: str, seconds: float) -> None:
+        """Start one fighting move (the pose follows the move's progress)."""
+        self.fight_move, self.fight_t0, self.fight_dur = move, self.time, seconds
+        if move == "punch":
+            self.fight_arm = 1 - self.fight_arm
+
+    def fight_progress(self) -> float:
+        """0..1 through the current move, or -1 if none (or it's over)."""
+        if not self.fight_move or self.fight_dur <= 0:
+            return -1.0
+        u = (self.time - self.fight_t0) / self.fight_dur
+        return u if u <= 1.0 else -1.0
+
     def leave(self) -> None:
         """Leap off the top of the screen; the world removes him once gone."""
         self.leaving = True
@@ -310,6 +420,7 @@ class Stickman:
         return False
 
     def grab(self, x: float, y: float) -> None:
+        self.drop_rod()
         self._detach()
         self.target_x = None
         self.hop_target = None
@@ -349,6 +460,8 @@ class Stickman:
             self._update_falling(dt, scene)
         elif st == State.HOP:
             self._update_hop(dt, scene)
+        elif st == State.GRAPPLE:
+            self._update_grapple(dt, scene)
         elif st in CLIMB_STATES:
             self._update_climb(dt, scene)
         else:
@@ -476,13 +589,20 @@ class Stickman:
             if d != (0, 0):
                 self._shift(*d)
         h, st = self.h, self.state
+        if self.shove:
+            nx = self.pos.x + self.shove * dt
+            if scene.in_work_area(nx, self.pos.y - 2) and (sp.x0 <= nx <= sp.x1):
+                self.pos.x = nx
+            self.shove = damp(self.shove, 0.0, 7.0, dt)
+            if abs(self.shove) < 0.05 * h:
+                self.shove = 0.0
         if self.running and self.time > self.run_until:
             self.running = False
         top = self.walk_speed * h * (RUN_FACTOR if self.running else 1.0)
 
         if st == State.LANDING:
-            self.speed = damp(self.speed, 0.0, 5.0, dt)
-            if self.state_time > 0.45:
+            self.speed = damp(self.speed, 0.0, 5.0 + 6.0 * self.land_impact, dt)
+            if self.state_time > self.land_time:
                 self.set_state(State.WALKING)
         elif st == State.IDLE:
             self.speed = damp(self.speed, 0.0, 8.0, dt)
@@ -519,6 +639,9 @@ class Stickman:
                         self.set_state(State.IDLE)
                 elif (dx > 0) != (self.facing > 0):
                     self.set_state(State.TURNING)
+            elif self.fighting:  # the fight decides where to go: wait for orders
+                self.idle_for = 1e9
+                self.set_state(State.IDLE)
             else:
                 # spontaneous behaviour, flavoured by personality
                 lazy = max(0.0, 2.0 - self.energy)
@@ -534,6 +657,8 @@ class Stickman:
                     self.jump()
                 elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0 + self.energy / 18.0 + 0.08):
                     self.hop_to_widget(scene)
+                elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0 + self.energy / 18.0 + 0.08 + self.energy / 45.0):
+                    self.try_grapple(scene)  # fishing rod: up onto a window, or hang from the top
         elif st == State.TURNING:
             self.speed = max(0.0, self.speed - 6.0 * h * dt)
             if not self._turned and self.state_time > 0.18:
@@ -542,7 +667,7 @@ class Stickman:
             if self.state_time > 0.45:
                 self.set_state(State.WALKING)
 
-        if self.state == State.WALKING and self.target_x is None:
+        if self.state == State.WALKING and self.target_x is None and not self.fighting:
             wall = self._find_wall(scene)
             if wall is not None:
                 if random.random() < self.climb_chance:
@@ -664,6 +789,82 @@ class Stickman:
             rect = self.attach_rect
             self.land(p)
             self.attach_rect = rect  # keep tracking that window smoothly
+
+    # ---- fishing rod
+    def _update_grapple(self, dt: float, scene: "DesktopScene") -> None:
+        h = self.h
+        p = self.grapple_plat
+        if p is not None:  # hooked onto a window that may move (or close)
+            d = self._follow_window(p.hwnd)
+            if d is None:
+                self.drop_rod()
+                self.start_fall(Vec())
+                return
+            if d != (0, 0):
+                self.anchor_pt = self.anchor_pt + Vec(*d)
+                self.grapple_plat = p = p.shifted(*d)
+                if self.hook_taut:
+                    self.hook = self.anchor_pt.copy()
+        a = self.anchor_pt
+        t = self.state_time
+        tip = self.rod_grip + normalize(a - self.rod_grip) * (ROD_LEN * h)
+        fly = max(0.12, (a - tip).length() / (HOOK_SPEED * h))
+        if t < ROD_WINDUP + fly and not self.hook_taut:  # winding up, then the hook flies out
+            self.speed = damp(self.speed, 0.0, 10.0, dt)
+            u = clamp((t - ROD_WINDUP) / fly, 0.0, 1.0)
+            if u <= 0.0:
+                self.hook = tip
+            else:
+                arc = (a - tip).length() * 0.12 * math.sin(math.pi * u)
+                self.hook = Vec(lerp(tip.x, a.x, u), lerp(tip.y, a.y, u) - arc)
+            if self.vel.y and self.support is None and self.state_time > 0:  # cast in mid-air: keep falling a bit
+                self.vel.y = min(self.vel.y + GRAVITY * h * dt, MAX_FALL * h)
+                self.pos = Vec(self.pos.x + self.vel.x * dt, self.pos.y + self.vel.y * dt)
+            return
+        if not self.hook_taut:  # hooked: start reeling in
+            self.hook_taut = True
+            self.hook = a.copy()
+            self.reel_from = self.pos.copy()
+            end = self._reel_end()
+            self.reel_time = max(0.25, (end - self.reel_from).length() / (REEL_SPEED * h))
+            self.vel = Vec()
+            self.squash_v -= 3.0
+            self._reel_t0 = self.time
+        u = clamp((self.time - self._reel_t0) / self.reel_time, 0.0, 1.0)
+        end = self._reel_end()
+        prev = self.pos
+        k = u * u * (3.0 - 2.0 * u)  # ease in and out
+        swing = 0.25 * h * math.sin(math.pi * u) * self.facing  # a little arc on the way up
+        self.pos = Vec(lerp(self.reel_from.x, end.x, k) - swing * 0.3, lerp(self.reel_from.y, end.y, k))
+        if dt > 0:
+            self.vel = (self.pos - prev) * (1.0 / dt)
+        if u < 1.0:
+            return
+        if self.grapple_mode == "climb" and p is not None:
+            # pulled up over the edge: step onto the window's top
+            self.drop_rod()
+            self.pos = Vec(clamp(a.x, p.x0 + 2, p.x1 - 2), p.y)
+            self.vel = Vec(0, 3.0 * h)
+            rect = self.attach_rect
+            self.land(p)
+            self.attach_rect = rect
+            return
+        # hanging from the top of the screen: sway a little, then let go
+        if not self.hang_until:
+            self.hang_until = self.time + random.uniform(1.5, 3.5)
+        sway = 0.12 * h * math.sin((self.time - self.hang_until) * 3.0)
+        self.pos = Vec(end.x + sway, end.y)
+        if self.time > self.hang_until:
+            self.hang_until = 0.0
+            self.drop_rod()
+            self.start_fall(Vec(self.facing * 0.6 * h, 0.0))
+
+    def _reel_end(self) -> Vec:
+        """Where the feet end up: just under the edge (climb) / hanging below the hook."""
+        h, a = self.h, self.anchor_pt
+        if self.grapple_mode == "climb":
+            return Vec(a.x - self.facing * 0.10 * h, a.y + 0.30 * h)
+        return Vec(a.x, a.y + 1.15 * h)
 
     # ---- climbing
     def _find_wall(self, scene: "DesktopScene") -> Wall | None:
@@ -788,6 +989,12 @@ class Stickman:
                      rotate(Vec(0.24 * h, -0.10 * h + 0.06 * h * fl), th) + lag * 0.8]
             return hip, th, feet, hands, (40.0, 40.0, 9.0, 11.0)
 
+        if st == State.GRAPPLE:
+            return self._rod_pose()
+
+        if st in (State.FALLING, State.HOP) and self.fighting and self.fight_move in ("jump_kick", "hit"):
+            return self._fight_air_pose()
+
         if st in (State.FALLING, State.HOP) and self.jumping:
             # deliberate jump: arms up and knees tucked on the way up,
             # legs reaching down for the floor on the way down
@@ -811,6 +1018,13 @@ class Stickman:
 
         if st == State.SITTING:
             return self._sit_pose()
+
+        if st == State.LANDING and self.land_impact > 0.3 and not (
+                self.fighting and self.state_time > self.land_time * 0.5):
+            return self._land_pose()
+
+        if self.fighting and st in (State.IDLE, State.LANDING, State.TURNING):
+            return self._fight_pose()
 
         if st == State.FALLING:
             flail = math.sin(t * 15.0)
@@ -876,12 +1090,180 @@ class Stickman:
             n = math.hypot(dx, dy) or 1.0
             hands[1] = Vec(dx / n * arm * 0.97, dy / n * arm * 0.97)
             self.facing = 1 if dx >= 0 else -1
+        elif self.gesture in PROPS and self.time < self.gesture_until:
+            hands, d_lean = self._prop_hands(arm)
+            lean += d_lean
         elif self.gesture == "type" and self.time < self.gesture_until:
             # bent over, hammering the field with both fists ("typing")
             k = math.sin(t * 24.0)
             hands = [Vec(f * 0.16 * h, arm * 0.62 + 0.07 * h * k), Vec(f * 0.21 * h, arm * 0.62 - 0.07 * h * k)]
             lean += f * 0.30
         return hip, lean, feet, hands, default_rates
+
+    # ---- doing a task: holding the thing that shows what they're doing
+    def _prop_hands(self, arm: float):
+        """(hands relative to the shoulder, extra lean) for the prop in self.gesture."""
+        h, f, t = self.h, self.facing, self.time
+        g = self.gesture
+        if g == "laptop":  # laptop on the far forearm, the near hand typing
+            k = math.sin(t * 22.0)
+            return [Vec(f * 0.13 * h, 0.15 * h), Vec(f * (0.22 * h) + 0.015 * h * k, 0.11 * h - 0.02 * h * abs(k))], f * 0.06
+        if g == "magnifier":  # lens up in front of the eyes, scanning; the other hand behind the back
+            k = math.sin(t * 2.2)
+            return [Vec(-f * 0.07 * h, 0.20 * h), Vec(f * 0.22 * h, -0.11 * h + 0.03 * h * k)], f * (0.16 + 0.05 * k)
+        if g == "box":  # carrying a box in both hands
+            b = 0.01 * h * math.sin(t * 6.0)
+            return [Vec(f * 0.13 * h, 0.15 * h + b), Vec(f * 0.30 * h, 0.15 * h + b)], -f * 0.04
+        if g == "letter":  # an envelope held up, waved a little
+            k = math.sin(t * 5.0)
+            return [Vec(f * 0.03 * h, arm * 0.9), Vec(f * 0.20 * h + 0.02 * h * k, -0.15 * h)], 0.0
+        if g == "map":  # a map spread in both hands, looking down at it
+            return [Vec(f * 0.08 * h, 0.10 * h), Vec(f * 0.34 * h, 0.08 * h)], f * 0.18
+        if g == "remote":  # remote pointed forward, clicking
+            k = 0.01 * h * max(0.0, math.sin(t * 9.0))
+            return [Vec(f * 0.02 * h, arm * 0.9), Vec(f * 0.29 * h, -0.05 * h + k)], f * 0.04
+        return [Vec(0, arm * 0.95), Vec(0, arm * 0.95)], 0.0
+
+    def prop_active(self) -> str:
+        if self.gesture in PROPS and self.time < self.gesture_until and self.state in (
+                State.IDLE, State.WALKING, State.LANDING, State.TURNING):
+            return self.gesture
+        return ""
+
+    # ---- landing
+    def _land_pose(self):
+        """Absorb the landing: knees bend (deeper the harder it was), arms out for balance;
+        a really hard one ends on one knee with a hand on the ground, then he rises."""
+        h, f, leg = self.h, self.facing, self.leg
+        tuck = self.stroke * 0.5
+        imp = self.land_impact
+        u = clamp(self.state_time / max(0.1, self.land_time), 0.0, 1.0)
+        k = 1.0 - smoothstep((u - 0.35) / 0.65)  # hold the crouch, then stand up
+        sh = self._shoulder_world()
+        ground = self.pos.y - tuck
+        if imp >= 0.9:  # three-point "superhero" landing: deep squat, a fist on the floor, the other arm back
+            hip = Vec(-f * 0.05 * h * k, -leg * (0.95 - 0.66 * k) - tuck)
+            feet = [Vec(-f * (0.07 + 0.11 * k) * h, -tuck), Vec(f * (0.08 + 0.10 * k) * h, -tuck)]
+            hands = [Vec(self.pos.x + f * 0.13 * h, ground) - sh if k > 0.3 else Vec(f * 0.02 * h, 0.30 * h),
+                     Vec(-f * (0.10 + 0.20 * k) * h, -0.02 * h - 0.12 * h * k)]
+            return hip, f * 0.78 * k, feet, hands, (34.0, 20.0, 40.0, 34.0)
+        depth = 0.12 + 0.38 * clamp((imp - 0.3) / 0.55, 0.0, 1.0)
+        hip = Vec(-f * 0.02 * h * k, -leg * (0.96 - depth * k) - tuck)
+        spread = 0.07 + 0.08 * k
+        feet = [Vec(-f * spread * h, -tuck), Vec(f * spread * h, -tuck)]
+        hands = [Vec(-f * 0.22 * h * k, 0.12 * h + 0.10 * h * (1 - k)), Vec(f * 0.24 * h * k, 0.10 * h + 0.12 * h * (1 - k))]
+        return hip, f * 0.30 * k * (0.5 + depth), feet, hands, (28.0, 16.0, 40.0, 24.0)
+
+    # ---- fighting poses (hands are relative to the shoulder, feet to the ground point)
+    def _fight_pose(self):
+        """Fighting stance (fists up, knees bent, bouncing), punch, kick, block."""
+        h, f, leg, t = self.h, self.facing, self.leg, self.time
+        tuck = self.stroke * 0.5
+        bounce = 0.014 * h * math.sin(t * 9.0)
+        hip = Vec(-f * 0.02 * h, -leg * 0.86 + bounce - tuck)
+        lean = f * 0.12
+        feet = [Vec(-f * 0.13 * h, -tuck), Vec(f * 0.11 * h, -tuck)]
+        guard_far, guard_near = Vec(f * 0.10 * h, -0.03 * h), Vec(f * 0.17 * h, -0.07 * h)
+        hands = [guard_far, guard_near]
+        rates = (26.0, 14.0, 30.0, 26.0)
+        u = self.fight_progress()
+        move = self.fight_move if u >= 0 else ""
+        reach = (self.upper_arm + self.forearm) * 0.98
+        if move == "punch":
+            # wind up, snap the fist out at head height, pull it back
+            out = smoothstep(u / 0.3) if u < 0.3 else 1.0 if u < 0.55 else 1.0 - smoothstep((u - 0.55) / 0.45)
+            wind = 1.0 - smoothstep(u / 0.25)
+            fist = Vec(f * (0.06 * h * (1 - out) + reach * out) - f * 0.05 * h * wind * (1 - out), -0.07 * h)
+            i = self.fight_arm
+            hands[i] = fist
+            hands[1 - i] = Vec(f * 0.12 * h, -0.10 * h)  # the other fist guards the face
+            lean = f * (0.12 + 0.20 * out)
+            hip = hip + Vec(f * 0.06 * h * out, 0.02 * h * out)
+            feet = [Vec(-f * 0.16 * h, -tuck), Vec(f * (0.11 + 0.06 * out) * h, -tuck)]
+            rates = (30.0, 22.0, 30.0, 55.0)
+        elif move == "kick":
+            # knee up, the leg shoots out at hip height (body leans back), then back down
+            up = smoothstep(u / 0.3)
+            out = 0.0 if u < 0.3 else smoothstep((u - 0.3) / 0.15) if u < 0.65 else 1.0 - smoothstep((u - 0.65) / 0.35)
+            down = smoothstep((u - 0.75) / 0.25) if u > 0.75 else 0.0
+            hip = Vec(-f * 0.06 * h * up, -leg * 0.93 - tuck)
+            lean = -f * (0.05 + 0.30 * out)
+            knee_up = Vec(f * 0.14 * h, -0.24 * h)
+            shot = Vec(f * 0.50 * h, -0.42 * h)
+            kick = knee_up + (shot - knee_up) * out
+            kick = kick + (Vec(f * 0.11 * h, -tuck) - kick) * down
+            feet = [Vec(-f * 0.08 * h, -tuck), kick]
+            hands = [Vec(-f * 0.27 * h, -0.02 * h - 0.06 * h * out), Vec(f * 0.20 * h, -0.10 * h)]
+            rates = (28.0, 20.0, 45.0, 28.0)
+        elif move == "block":
+            # forearms crossed in front of the face, leaning away, knees deeper
+            k = smoothstep(u / 0.15) * (1.0 - smoothstep((u - 0.8) / 0.2))
+            hands = [guard_far + (Vec(f * 0.14 * h, -0.17 * h) - guard_far) * k,
+                     guard_near + (Vec(f * 0.16 * h, -0.12 * h) - guard_near) * k]
+            lean = f * (0.12 - 0.22 * k)
+            hip = hip + Vec(-f * 0.03 * h * k, 0.04 * h * k)
+            rates = (30.0, 20.0, 30.0, 45.0)
+        elif move in ("rod", "rod_pull"):
+            # rod pointed at the opponent; on the pull: leaning back, yanking
+            sh = self._shoulder_world()
+            to_hook = normalize(self.hook - sh) if self.rod_on else Vec(f, -0.3)
+            arm = (self.upper_arm + self.forearm) * 0.9
+            pull = move == "rod_pull"
+            hand = to_hook * arm * (0.65 if pull else 1.0)
+            hands = [hand * 0.8 + Vec(0, 0.03 * h), hand]
+            lean = -f * 0.30 if pull else f * 0.10
+            hip = hip + Vec(-f * 0.05 * h if pull else 0.0, 0.0)
+            self.rod_grip = sh + hand
+            rates = (26.0, 18.0, 30.0, 40.0)
+        elif move == "hit":  # staggering after a hit that didn't knock him off his feet
+            k = 1.0 - smoothstep(u)
+            lean = f * 0.12 - f * 0.40 * k
+            hands = [Vec(-f * 0.10 * h, 0.05 * h), Vec(f * 0.05 * h, 0.10 * h)]
+            rates = (24.0, 30.0, 30.0, 30.0)
+        return hip, lean, feet, hands, rates
+
+    def _rod_pose(self):
+        """Casting (rod swings back over the shoulder, then forward), reeling up (arms toward
+        the hook, legs trailing) or hanging under the hook."""
+        h, f, leg = self.h, self.facing, self.leg
+        tuck = self.stroke * 0.5
+        sh = self._shoulder_world()
+        to_hook = normalize(self.anchor_pt - sh)
+        arm = (self.upper_arm + self.forearm) * 0.92
+        if not self.hook_taut:
+            t = self.state_time
+            k = smoothstep(t / ROD_WINDUP)
+            back = Vec(-f * 0.10 * h, -0.30 * h)  # rod up over the shoulder
+            fwd = to_hook * arm
+            hand = back + (fwd - back) * smoothstep((t - ROD_WINDUP * 0.7) / 0.12) if t > ROD_WINDUP * 0.7 else back * k
+            hands = [hand + Vec(-f * 0.03 * h, 0.05 * h), hand]
+            hip = Vec(-f * 0.03 * h, -leg * 0.88 - tuck)
+            feet = [Vec(-f * 0.10 * h, -tuck), Vec(f * 0.09 * h, -tuck)]
+            lean = -f * 0.10 * k + f * 0.15 * smoothstep((t - ROD_WINDUP) / 0.15)
+            self.rod_grip = sh + hand
+            return hip, lean, feet, hands, (24.0, 14.0, 30.0, 34.0)
+        # reeling / hanging: both hands up the rod toward the hook, body hanging below
+        hand = to_hook * arm
+        hands = [hand * 0.82 + Vec(0, 0.03 * h), hand]
+        flutter = math.sin(self.time * 9.0)
+        hip = Vec(0, -leg * 0.95)
+        feet = [Vec(-f * 0.05 * h + 0.02 * h * flutter, 0.02 * h), Vec(f * 0.07 * h - 0.02 * h * flutter, -0.04 * h)]
+        lean = math.atan2(to_hook.x, -to_hook.y) * 0.6
+        self.rod_grip = sh + hand
+        return hip, lean, feet, hands, (20.0, 10.0, 14.0, 30.0)
+
+    def _fight_air_pose(self):
+        """Flying kick (leading leg straight out), or knocked back through the air."""
+        h, f, leg = self.h, self.facing, self.leg
+        hip = Vec(0, -leg * 0.86)
+        if self.fight_move == "jump_kick":
+            feet = [Vec(-f * 0.04 * h, -0.30 * h), Vec(f * 0.42 * h, -0.22 * h)]
+            hands = [Vec(-f * 0.24 * h, -0.14 * h), Vec(f * 0.14 * h, -0.10 * h)]
+            return hip, -f * 0.22, feet, hands, (26.0, 16.0, 40.0, 26.0)
+        flail = math.sin(self.time * 18.0)
+        feet = [Vec(f * 0.18 * h, -0.14 * h), Vec(f * 0.06 * h, -0.05 * h + 0.03 * h * flail)]
+        hands = [Vec(f * 0.22 * h, -0.20 * h + 0.05 * h * flail), Vec(f * 0.16 * h, -0.26 * h - 0.05 * h * flail)]
+        return hip, -f * 0.45, feet, hands, (24.0, 22.0, 18.0, 20.0)
 
     def _sit_pose(self):
         """Sitting: on the floor with knees up, or on a window's edge with the
@@ -1003,6 +1385,15 @@ class Stickman:
 
     def bbox(self) -> Rect:
         pts = list(self.joints.values()) + [c for _, c, _ in self.curves.values()]
+        if self.prop_active():
+            sh = self.joints.get("shoulder", self.pos)
+            pts += [sh + Vec(-0.45 * self.h, -0.45 * self.h), sh + Vec(0.45 * self.h, 0.35 * self.h)]
+        for x, y, t0, d, size in self.dust:
+            if self.time - t0 < DUST_TIME:
+                pts += [Vec(x + d * 0.75 * self.h * size, y - 0.25 * self.h * size), Vec(x, y + 4)]
+        if self.rod_on:
+            g = self.rod_grip
+            pts += [self.hook, g + normalize(self.hook - g) * (ROD_LEN * self.h), g + Vec(0, ROD_LEN * self.h)]
         m = self.head_r + self.stroke + 4
         return Rect(int(min(v.x for v in pts) - m), int(min(v.y for v in pts) - m),
                     int(max(v.x for v in pts) + m), int(max(v.y for v in pts) + m))

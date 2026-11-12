@@ -68,6 +68,7 @@ class Settings:
     control: bool = False       # may close/minimize/open windows and type, after you allow each action
     trust_windows: bool = False  # ...open/close/show/hide windows WITHOUT asking (typing still asks)
     read_fields: bool = False    # ...check spelling in other apps' text fields (reads that one field, locally)
+    read_pages: bool = False     # ...read the open web page's text when asked (sent to Google like the chat)
     start_apps: bool = True      # ...open any app from the Start menu by name (asks unless trusted)
     clipboard: bool = False      # read / replace what you copied, only when your message mentions it
     reminders: bool = True       # "remind me in 20 minutes" (local timers)
@@ -79,6 +80,8 @@ class Settings:
     music_bpm: int = 110         # beats per minute: how often the boxes are struck
     music_output: str = ""       # "" = Windows default, "auto-speakers", or an output device name
     couch: bool = True           # sit on a couch together when you watch videos
+    vscode: bool = True          # link with the StickAI extension for VS Code (code explanations)
+    coder: str = "yellow"        # the character who helps with code
 
 
 @dataclass(frozen=True)
@@ -167,6 +170,7 @@ def load_roster(path: Path) -> Roster:
         control=bool(s.get("control", d.control)),
         trust_windows=bool(s.get("trust_windows", d.trust_windows)),
         read_fields=bool(s.get("read_fields", d.read_fields)),
+        read_pages=bool(s.get("read_pages", d.read_pages)),
         start_apps=bool(s.get("start_apps", d.start_apps)),
         clipboard=bool(s.get("clipboard", d.clipboard)),
         reminders=bool(s.get("reminders", d.reminders)),
@@ -178,6 +182,8 @@ def load_roster(path: Path) -> Roster:
         music_bpm=int(_clamp(s.get("music_bpm", d.music_bpm), 40, 240, "music_bpm")),
         music_output=str(s.get("music_output", d.music_output)),
         couch=bool(s.get("couch", d.couch)),
+        vscode=bool(s.get("vscode", d.vscode)),
+        coder=str(s.get("coder", d.coder)).strip().lower() or d.coder,
     )
 
     chars: dict[str, CharacterSpec] = {}
@@ -314,6 +320,9 @@ def save_roster(path: Path, roster: Roster) -> None:
         "# With control on: check spelling in a text field of another app when you ask. Reads only",
         "# that field's text, checked on your PC by the Windows spell checker (never sent anywhere).",
         f"read_fields = {str(s.read_fields).lower()}",
+        "# With control on: read the text of the web page open in your browser when you ask",
+        "# (\"summarize this page\"). The text is sent to Google with that request.",
+        f"read_pages = {str(s.read_pages).lower()}",
         "# With control on: open any app from your Start menu by its name (\"open Spotify\").",
         f"start_apps = {str(s.start_apps).lower()}",
         "",
@@ -343,6 +352,11 @@ def save_roster(path: Path, roster: Roster) -> None:
         "",
         "# When you watch something (fullscreen, YouTube, Netflix, VLC...), they gather on a couch.",
         f"couch = {str(s.couch).lower()}",
+        "",
+        "# Code helper in VS Code (install the extension from the vscode/ folder). Code you ask",
+        "# about is sent to Gemini only when you ask; `coder` is the character who explains it.",
+        f"vscode = {str(s.vscode).lower()}",
+        f"coder = {_str(s.coder)}",
         "",
         "# Keep the chat window above other windows.",
         f"chat_on_top = {str(s.chat_on_top).lower()}",

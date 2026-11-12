@@ -31,6 +31,8 @@ from .overlay import HUD_LOGICAL, OverlayWindow
 from .ui.bubble import SpeechBubble, reading_time
 from .brain.memory import MemoryStore
 from .ui.chatwindow import ChatWindow
+from .ui.quickask import QuickAsk
+from .ui.toast import Toasts
 from .ui.hotkey import GlobalHotkey
 from .ui.settings import SettingsDialog
 from .ui import theme
@@ -132,7 +134,12 @@ class StickApp:
         for e in self.memory.entries[-80:]:  # older history stays on disk
             self.chat.add_entry(e, follow=False)
         self.chat.set_present([])
-        self.chat.submitted.connect(self.director.handle)
+        self.chat.submitted.connect(lambda text, img: self.director.handle(text, img, to=self.chat.addressees()))
+        self.chat.stop_requested.connect(self.director.cancel_thinking)
+        self.chat.summon_all.connect(lambda: [self.summon(k) for k in self.roster.characters])
+        self.director.thinking.connect(self.chat.set_thinking)
+        self.toasts = Toasts(on_click=self.chat.summon)
+        self.director.message.connect(self._maybe_toast)
         self.director.message.connect(self.chat.add_entry)
         self.director.status.connect(self.chat.set_status)
         self.chat.settings_requested.connect(self.open_settings)
@@ -348,17 +355,82 @@ class StickApp:
         return [s.key for s in self.world.stickmen if not s.leaving]
 
     def summon(self, key: str) -> bool:
-        """Drop a character onto the desktop. Returns True if newly spawned."""
+        """Bring a character onto the desktop. Returns True if newly spawned."""
         spec = self.roster.characters.get(key)
         if spec is None or self.world.get(key) is not None:
             return False
         scale = self.hud_overlay.scale if self.hud_overlay else 1.0
         s = self.world.spawn(key, spec.display_name, spec.color, config.STICKMAN_HEIGHT_DIP * scale * spec.size)
         self._apply_spec(s)
+        self._entrance(s)
         log.info("Summoned %s", spec.display_name)
         self.director.note_event(tr("ev.arrived", name=spec.display_name))
         self._update_present()
         return True
+
+    def _entrance(self, s) -> None:
+        """Arrive in style: drop in from the top, walk / run in from a side, or jump up from below."""
+        from .anim.mathutil import Vec
+        from .anim.stickman import State
+        mode = random.choices(("drop", "side", "bottom"), (0.35, 0.40, 0.25))[0]
+        if mode == "drop":
+            return
+        sc = self.scene
+        mon = next((m for m in sc.monitors if m.primary), sc.monitors[0] if sc.monitors else None)
+        if mon is None:
+            return
+        wa = mon.work
+        floor = sc.floor_under((wa.left + wa.right) / 2, wa.bottom - 2)
+        if floor is None:
+            return
+        h = s.h
+        if mode == "side":
+            left = random.random() < 0.5
+            x = max(floor.x0, wa.left) + 2 if left else min(floor.x1, wa.right) - 2
+            s.pos = Vec(x, floor.y)
+            s.vel = Vec()
+            s.land(floor)
+            s.land_impact, s.dust = 0.0, []
+            s.facing = 1 if left else -1
+            s.go_to(x + s.facing * random.uniform(2.5, 6.0) * h, max_seconds=6.0, run=random.random() < 0.5)
+            if s.state != State.WALKING:
+                s.set_state(State.WALKING)
+        else:  # from below: hop up out of the taskbar
+            x = random.uniform(max(floor.x0, wa.left) + 2 * h, min(floor.x1, wa.right) - 2 * h)
+            s.pos = Vec(x, floor.y + 1.3 * h)
+            s.start_fall(Vec(random.uniform(-1.0, 1.0) * h, -7.2 * h))
+            s.jumping = True
+
+    def quick_ask_at_cursor(self) -> None:
+        """Right-click on a stickman: a small box for a message just to him."""
+        cx, cy = win32.cursor_pos()
+        s = self.world.pick(cx, cy, slack=0.06)
+        if s is None:
+            return
+        spec = self.roster.characters.get(s.key)
+        if spec is None:
+            return
+        s.face_toward(cx)
+        s.talk(4.0)
+        box = QuickAsk(s.key, spec.display_name, spec.color)
+        box.sent.connect(lambda key, text: self.director.handle(text, None, to=[key]))
+        box.open_at_cursor()
+        self._quick_box = box  # keep a reference while it's open
+
+    def _maybe_toast(self, e) -> None:
+        """While the chat is closed, lines from them (and task results) pop up in a corner."""
+        st = self.roster.settings
+        if not st.notify or self.hidden or self.chat.isVisible():
+            return
+        if e.kind == "char":
+            spec = self.roster.characters.get(e.speaker)
+            name, color = (spec.display_name, spec.color) if spec else (e.speaker, "#888888")
+        elif e.kind == "event" and e.text[:1] in ("✅", "❌", "⚠", "🏆", "⏰"):
+            name, color = "StickAI", "#8d929c"
+        else:
+            return
+        self.toasts.corner = st.notify_corner
+        self.toasts.show(name, color, e.text, sound=st.notify_sound)
 
     def _update_present(self) -> None:
         self.chat.set_present([(s.name, s.color) for s in self.world.stickmen if not s.leaving])
@@ -546,6 +618,7 @@ class StickApp:
     def apply_roster(self, roster: Roster) -> None:
         """Make the running app match a (new) roster: language, looks, timers..."""
         old = self.roster.settings
+        old_chars, new_chars = self.roster.characters, roster.characters
         self.roster = roster
         new = roster.settings
         for s in self.world.stickmen:
@@ -558,6 +631,9 @@ class StickApp:
         self._apply_spellcheck()
         if (new.vscode, new.coder, new.language) != (old.vscode, old.coder, old.language):
             self.code.apply_settings()
+        if [(k, c.display_name, c.color) for k, c in new_chars.items()] != \
+                [(k, c.display_name, c.color) for k, c in old_chars.items()] or new.language != old.language:
+            self.chat.build_chips()
         if new.chat_on_top != old.chat_on_top:
             self.chat.apply_on_top(new.chat_on_top)
         if new.banter_every != old.banter_every:

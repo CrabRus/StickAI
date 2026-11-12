@@ -15,6 +15,7 @@ LANGUAGES = {"en": "English", "ru": "Russian", "sk": "Slovak"}
 # The sheet as shipped; "Reset to defaults" in the settings window restores from it.
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "defaults" / "characters.default.toml"
 BUBBLE_MODES = ("full", "indicator", "off")
+NOTIFY_CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
 VISION_MODES = ("off", "ask", "auto")
 
 
@@ -80,6 +81,9 @@ class Settings:
     music_bpm: int = 110         # beats per minute: how often the boxes are struck
     music_output: str = ""       # "" = Windows default, "auto-speakers", or an output device name
     couch: bool = True           # sit on a couch together when you watch videos
+    notify: bool = True          # while the chat is closed, their lines pop up in a corner
+    notify_sound: bool = False   # ...with the Windows notification sound
+    notify_corner: str = "bottom-right"
     vscode: bool = True          # link with the StickAI extension for VS Code (code explanations)
     coder: str = "yellow"        # the character who helps with code
 
@@ -182,6 +186,9 @@ def load_roster(path: Path) -> Roster:
         music_bpm=int(_clamp(s.get("music_bpm", d.music_bpm), 40, 240, "music_bpm")),
         music_output=str(s.get("music_output", d.music_output)),
         couch=bool(s.get("couch", d.couch)),
+        notify=bool(s.get("notify", d.notify)),
+        notify_sound=bool(s.get("notify_sound", d.notify_sound)),
+        notify_corner=_choice(s.get("notify_corner", d.notify_corner), NOTIFY_CORNERS, "notify_corner"),
         vscode=bool(s.get("vscode", d.vscode)),
         coder=str(s.get("coder", d.coder)).strip().lower() or d.coder,
     )
@@ -352,6 +359,12 @@ def save_roster(path: Path, roster: Roster) -> None:
         "",
         "# When you watch something (fullscreen, YouTube, Netflix, VLC...), they gather on a couch.",
         f"couch = {str(s.couch).lower()}",
+        "",
+        "# While the chat window is closed, what they say pops up in a corner of the screen",
+        "# (corner: bottom-right, bottom-left, top-right, top-left), optionally with a sound.",
+        f"notify = {str(s.notify).lower()}",
+        f"notify_sound = {str(s.notify_sound).lower()}",
+        f"notify_corner = {_str(s.notify_corner)}",
         "",
         "# Code helper in VS Code (install the extension from the vscode/ folder). Code you ask",
         "# about is sent to Gemini only when you ask; `coder` is the character who explains it.",

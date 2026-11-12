@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QSlider, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from ..brain.characters import BUBBLE_MODES, LANGUAGES, VISION_MODES, Roster, load_defaults, save_roster
+from ..brain.characters import BUBBLE_MODES, LANGUAGES, NOTIFY_CORNERS, VISION_MODES, Roster, load_defaults, save_roster
 from ..i18n import tr
 from ..tools.files import default_folder
 from ..brain.gemini import character_keys, save_character_keys
@@ -198,6 +198,20 @@ class SettingsDialog(QDialog):
         for mode in BUBBLE_MODES:
             self.bubbles.addItem(tr(f"set.bubbles_{mode}"), mode)
         form.addRow(tr("set.bubbles"), self.bubbles)
+        self.notify = QCheckBox(tr("set.notify"))
+        self.notify_sound = QCheckBox(tr("set.notify_sound"))
+        self.notify_sound.setStyleSheet("margin-left: 22px;")
+        self.notify_corner = QComboBox()
+        for c in NOTIFY_CORNERS:
+            self.notify_corner.addItem(tr(f"set.corner_{c}"), c)
+        self.notify.toggled.connect(self.notify_sound.setEnabled)
+        self.notify.toggled.connect(self.notify_corner.setEnabled)
+        form.addRow("", self.notify)
+        form.addRow("", self.notify_sound)
+        form.addRow(tr("set.notify_corner"), self.notify_corner)
+        for w in (self.notify, self.notify_sound):
+            w.toggled.connect(self._dirty)
+        self.notify_corner.currentIndexChanged.connect(self._dirty)
         self.vision = QComboBox()
         for mode in VISION_MODES:
             self.vision.addItem(tr(f"set.vision_{mode}"), mode)
@@ -497,6 +511,11 @@ class SettingsDialog(QDialog):
         s = self.draft.settings
         self.lang.setCurrentIndex(max(0, self.lang.findData(s.language)))
         self.bubbles.setCurrentIndex(max(0, self.bubbles.findData(s.bubbles)))
+        self.notify.setChecked(s.notify)
+        self.notify_sound.setChecked(s.notify_sound)
+        self.notify_sound.setEnabled(s.notify)
+        self.notify_corner.setCurrentIndex(max(0, self.notify_corner.findData(s.notify_corner)))
+        self.notify_corner.setEnabled(s.notify)
         self.banter.setChecked(s.banter)
         self.b_lo.setValue(s.banter_every[0] / 60)
         self.b_hi.setValue(s.banter_every[1] / 60)
@@ -687,6 +706,8 @@ class SettingsDialog(QDialog):
         old_lang = self.app.roster.settings.language
         self.draft = self.draft.with_settings(
             language=self.lang.currentData(), bubbles=self.bubbles.currentData(), banter=self.banter.isChecked(),
+            notify=self.notify.isChecked(), notify_sound=self.notify_sound.isChecked(),
+            notify_corner=self.notify_corner.currentData() or "bottom-right",
             banter_every=(max(30.0, lo), max(30.0, hi)), react_to_throws=self.react.isChecked(),
             greet_on_arrival=self.greet.isChecked(), read_fields=self.read_fields.isChecked(),
             read_pages=self.read_pages.isChecked(),

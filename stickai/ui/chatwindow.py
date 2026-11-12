@@ -13,11 +13,12 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QEvent, QRectF, QLocale, QMimeData, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtCore import QDateTime, QEvent, QPointF, QRectF, QLocale, QMimeData, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QImage, QMouseEvent, QPainter,
+                           QPixmap)
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QSizePolicy, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QScrollArea, QToolButton,
-    QVBoxLayout, QWidget,
+    QApplication, QFileDialog, QFrame, QMenu, QSizePolicy, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+    QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..brain.memory import Entry
@@ -50,6 +51,9 @@ QToolButton#Row { padding: 0; }
 QToolButton:hover { background: #343944; }
 QToolButton#Quit { color: #ff8a80; }
 QToolButton#Quit:hover { background: #5a2a2a; }
+QToolButton#Stop { color: #ff8a80; font: 11pt 'Segoe UI Symbol'; }
+QToolButton#Stop:hover { background: #5a2a2a; }
+QToolButton#Chip { font: 9pt 'Segoe UI'; border-radius: 11px; padding: 2px 10px; }
 QFrame#Attach { background: #2a2e36; border-radius: 8px; }
 QScrollBar:vertical { background: transparent; width: 8px; }
 QScrollBar::handle:vertical { background: #3a3f4a; border-radius: 4px; min-height: 30px; }
@@ -97,6 +101,8 @@ class MessageBubble(QWidget):
         self.setToolTip("")
         self._cache_w = -1
         self._cache_size = QSize()
+        self.bold = bold
+        self._label: QLabel | None = None  # made on the first click: selectable text (cheap until then)
 
     def _text_size(self, max_w: int) -> QSize:
         if max_w != self._cache_w:
@@ -117,13 +123,81 @@ class MessageBubble(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self.bg)
         p.drawRoundedRect(QRectF(self.rect()), self.RADIUS, self.RADIUS)
-        p.setPen(self.fg)
-        p.setFont(self.font_)
-        p.drawText(self.rect().adjusted(self.PAD_X, self.PAD_Y, -self.PAD_X, -self.PAD_Y),
-                   Qt.TextFlag.TextWordWrap, self.text)
+        if self._label is None:
+            p.setPen(self.fg)
+            p.setFont(self.font_)
+            p.drawText(self.rect().adjusted(self.PAD_X, self.PAD_Y, -self.PAD_X, -self.PAD_Y),
+                       Qt.TextFlag.TextWordWrap, self.text)
 
-    def contextMenuEvent(self, e) -> None:  # right-click: copy the message
-        QGuiApplication.clipboard().setText(self.text)
+    # ---- selecting and copying: a real selectable label replaces the painted text once you click
+    def _ensure_label(self) -> QLabel:
+        if self._label is None:
+            lab = QLabel(self.text, self)
+            lab.setWordWrap(True)
+            lab.setTextFormat(Qt.TextFormat.PlainText)
+            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                        | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            lab.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+            sel = "rgba(0,0,0,70)" if self.fg.lightness() < 128 else "rgba(255,255,255,80)"
+            lab.setStyleSheet(f"QLabel {{ color: {self.fg.name()}; background: transparent; padding: 0; "
+                              f"font: {600 if self.bold else 400} 10.5pt 'Segoe UI'; "
+                              f"selection-background-color: {sel}; selection-color: {self.fg.name()}; }}")
+            lab.setCursor(Qt.CursorShape.IBeamCursor)
+            lab.installEventFilter(self)
+            self._label = lab
+            self._place_label()
+            lab.show()
+            self.update()
+        return self._label
+
+    def _place_label(self) -> None:
+        if self._label is not None:
+            self._label.setGeometry(self.rect().adjusted(self.PAD_X, self.PAD_Y, -self.PAD_X, -self.PAD_Y))
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._place_label()
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() != Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(e)
+        lab = self._ensure_label()
+        local = QPointF(e.position().x() - self.PAD_X, e.position().y() - self.PAD_Y)
+        QApplication.sendEvent(lab, QMouseEvent(e.type(), local, e.globalPosition(), e.button(), e.buttons(),
+                                                e.modifiers()))
+        self._forward = True
+
+    def mouseMoveEvent(self, e) -> None:  # the drag that started on the bubble keeps selecting
+        if getattr(self, "_forward", False) and self._label is not None:
+            local = QPointF(e.position().x() - self.PAD_X, e.position().y() - self.PAD_Y)
+            QApplication.sendEvent(self._label, QMouseEvent(e.type(), local, e.globalPosition(), e.button(),
+                                                            e.buttons(), e.modifiers()))
+
+    def mouseReleaseEvent(self, e) -> None:
+        if getattr(self, "_forward", False) and self._label is not None:
+            self._forward = False
+            local = QPointF(e.position().x() - self.PAD_X, e.position().y() - self.PAD_Y)
+            QApplication.sendEvent(self._label, QMouseEvent(e.type(), local, e.globalPosition(), e.button(),
+                                                            e.buttons(), e.modifiers()))
+
+    def eventFilter(self, obj, e) -> bool:
+        if obj is self._label and e.type() == QEvent.Type.ContextMenu:
+            self.contextMenuEvent(e)
+            return True
+        return False
+
+    def contextMenuEvent(self, e) -> None:  # right-click: copy the selection or the whole message
+        lab = self._label
+        chosen = lab.selectedText() if lab is not None and lab.hasSelectedText() else ""
+        menu = QMenu(self)
+        menu.setStyleSheet(theme.MENU_STYLE)
+        if chosen:
+            menu.addAction(tr("chat.copy_sel"), lambda: QGuiApplication.clipboard().setText(chosen))
+        menu.addAction(tr("chat.copy"), lambda: QGuiApplication.clipboard().setText(self.text))
+        menu.addAction(tr("chat.select_all"), lambda: (self._ensure_label().setSelection(0, len(self.text)),
+                                                       self._label.setFocus()))
+        menu.exec(e.globalPos())
+        menu.deleteLater()
 
 
 ROW_H = 40       # height of the input row: buttons and a one-line input box line up
@@ -201,6 +275,8 @@ class ChatInput(QPlainTextEdit):
 class ChatWindow(QWidget):
     submitted = Signal(str, object)  # text, QImage | None
     settings_requested = Signal()
+    stop_requested = Signal()       # stop the answer being thought up
+    summon_all = Signal()
     quit_requested = Signal()
     look_requested = Signal()
 
@@ -282,11 +358,26 @@ class ChatWindow(QWidget):
             b.setObjectName("Row")
             b.setFixedSize(ROW_H + 6, ROW_H)
         self.send_btn.setFixedHeight(ROW_H)
+        self.stop_btn = QToolButton()  # shown while they think: cancels that answer
+        self.stop_btn.setObjectName("Stop")
+        self.stop_btn.setText("■")
+        self.stop_btn.setFixedSize(ROW_H, ROW_H)
+        self.stop_btn.clicked.connect(self.stop_requested.emit)
+        self.stop_btn.hide()
+
+        # who you're talking to: one chip per character + "everyone" (sticky until clicked again)
+        self.to_keys: list[str] = []
+        self.chips_row = QHBoxLayout()
+        self.chips_row.setSpacing(5)
+        self.chips_row.setContentsMargins(0, 0, 0, 0)
+        self._chips: dict[str, QToolButton] = {}
+
         row = QHBoxLayout()
         row.setSpacing(6)
         row.addWidget(self.clip, 0, Qt.AlignmentFlag.AlignBottom)
         row.addWidget(self.look_btn, 0, Qt.AlignmentFlag.AlignBottom)
         row.addWidget(self.input, 1)
+        row.addWidget(self.stop_btn, 0, Qt.AlignmentFlag.AlignBottom)
         row.addWidget(self.send_btn, 0, Qt.AlignmentFlag.AlignBottom)
 
         self.status = QLabel()
@@ -300,6 +391,7 @@ class ChatWindow(QWidget):
         lay.addLayout(header)
         lay.addWidget(self.scroll, 1)
         lay.addWidget(self.attach_frame)
+        lay.addLayout(self.chips_row)
         lay.addLayout(row)
         lay.addWidget(self.status)
         self._people: list[tuple[str, str]] = []
@@ -313,7 +405,77 @@ class ChatWindow(QWidget):
         self.rm.setToolTip(tr("chat.remove_pic"))
         self.gear.setToolTip(tr("chat.settings_tip"))
         self.quit_btn.setToolTip(tr("chat.quit_tip"))
+        self.stop_btn.setToolTip(tr("chat.stop_tip"))
         self.set_present(self._people)
+        self.build_chips()
+
+    # ------------------------------------------------------------ addressee chips
+    def build_chips(self) -> None:
+        while self.chips_row.count():
+            item = self.chips_row.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self._chips.clear()
+        chars = self.app.roster.characters
+        self.to_keys = [k for k in self.to_keys if k in chars or k == "*"]
+        all_btn = QToolButton()
+        all_btn.setObjectName("Chip")
+        all_btn.setText(tr("chat.to_all"))
+        all_btn.setToolTip(tr("chat.to_all_tip"))
+        all_btn.setCheckable(True)
+        all_btn.clicked.connect(lambda: self._chip_clicked("*"))
+        self.chips_row.addWidget(all_btn)
+        self._chips["*"] = all_btn
+        for key, c in chars.items():
+            b = QToolButton()
+            b.setObjectName("Chip")
+            b.setText(f"● {c.display_name}")
+            b.setCheckable(True)
+            b.setToolTip(tr("chat.to_tip", name=c.display_name))
+            b.clicked.connect(lambda _c=False, k=key: self._chip_clicked(k))
+            b.setStyleSheet(f"QToolButton#Chip {{ color: {c.color}; }}"
+                            f"QToolButton#Chip:checked {{ background: {c.color}; color: {_text_color(c.color)}; "
+                            f"border-color: {c.color}; }}")
+            self.chips_row.addWidget(b)
+            self._chips[key] = b
+        self.chips_row.addStretch(1)
+        self._sync_chips()
+
+    def _chip_clicked(self, key: str) -> None:
+        if key == "*":
+            self.to_keys = [] if "*" in self.to_keys else ["*"]
+            if self.to_keys:
+                self.summon_all.emit()  # "everyone": call them all onto the desktop right away
+        elif key in self.to_keys:
+            self.to_keys.remove(key)
+        else:
+            self.to_keys = [k for k in self.to_keys if k != "*"] + [key]
+        self._sync_chips()
+        self.input.setFocus()
+
+    def _sync_chips(self) -> None:
+        present = {n for n, _c in self._people}
+        for key, b in self._chips.items():
+            b.setChecked(key in self.to_keys)
+            if key != "*":
+                c = self.app.roster.characters.get(key)
+                if c is None:
+                    continue
+                here = c.display_name in present
+                col = QColor(c.color)
+                fg = c.color if here else f"rgba({col.red()},{col.green()},{col.blue()},110)"  # not out yet: dimmed
+                b.setStyleSheet(f"QToolButton#Chip {{ color: {fg}; }}"
+                                f"QToolButton#Chip:checked {{ background: {c.color}; color: {_text_color(c.color)}; "
+                                f"border-color: {c.color}; }}")
+                b.setToolTip(tr("chat.to_tip", name=c.display_name) + ("" if here else chr(10) + tr("chat.to_absent")))
+
+    def addressees(self) -> list[str]:
+        if "*" in self.to_keys:
+            return list(self.app.roster.characters)
+        return list(self.to_keys)
+
+    def set_thinking(self, on: bool) -> None:
+        self.stop_btn.setVisible(on)
 
     # ------------------------------------------------------------ window
     def showEvent(self, e) -> None:
@@ -374,9 +536,13 @@ class ChatWindow(QWidget):
         self._people = list(people)
         if not people:
             self.present.setText(tr("chat.nobody"))
+            if hasattr(self, "_chips"):
+                self._sync_chips()
             return
         dots = "&nbsp;&nbsp;".join(f'<span style="color:{c}">●</span>&nbsp;{n}' for n, c in people)
         self.present.setText(f"{tr('chat.present')}&nbsp;&nbsp;{dots}")
+        if hasattr(self, "_chips"):
+            self._sync_chips()
 
     def set_status(self, text: str) -> None:
         self.status.setText(text)
@@ -398,6 +564,7 @@ class ChatWindow(QWidget):
             lab.setObjectName("Event")
             lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lab.setWordWrap(True)
+            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self._append(lab)
             self._last_char = ""
         elif e.kind == "user":

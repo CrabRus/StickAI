@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Arrivals:** a summoned character drops from the top, walks or runs in from a side, or jumps up out of the taskbar.
+- **Chat:**
+  - select and copy messages (right-click menu);
+  - addressee chips (one character, several, or "Everyone");
+  - a stop button that cancels the answer being thought up.
+- **Right-click a stickman:** a message box just for him.
+- **Notifications** in a chosen corner while the chat is closed, with an optional sound.
 - Fixed: typing in the chat box could freeze the app for seconds ("Not responding"). The auto-growing box and its
   scrollbar fed back into each other (scrollbar -> narrower -> re-wrap -> taller -> scrollbar...). Now there is no
   scrollbar and the box is resized once per change.

@@ -111,6 +111,20 @@ To start over, quit the app and delete `memory/`.
 
    Free-tier quotas are small (reportedly about 20 requests/day for the newest Flash, more for Flash-Lite), so the default list starts with Flash-Lite. Banter and summaries also use requests; tune `banter_every` and `summarize_every` if you run out. Check your real limits in AI Studio.
 
+### Chat, notifications and talking to one of them
+
+- **Arrivals:** a summoned character drops in from the top, walks or runs in from a side of the screen, or
+  jumps up out of the taskbar.
+- **Who you talk to:** the chips above the input box pick the addressee (they stay picked until you click
+  them again). "Everyone" also calls everybody onto the desktop. A dimmed chip is not out yet and comes when
+  you send. Names in the message still work as before.
+- **Right-click a stickman** for a small box with a message just for him. It also shows in the chat history.
+- **Stop (■):** shown while they think up an answer, it cancels that answer and any follow-up steps.
+- **Copy:** click into a message to select text (Ctrl+C), or right-click it: copy the selection, copy the
+  message, select all.
+- **Notifications:** while the chat window is closed, their lines and task results pop up in a corner.
+  Settings: on / off, sound, which corner. Click one to open the chat.
+
 ### Settings window (⚙ in the chat window, or tray → Settings)
 
 - **General:**

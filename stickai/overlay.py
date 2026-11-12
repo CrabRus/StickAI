@@ -63,6 +63,8 @@ class OverlayWindow(QWidget):
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             self.app.begin_drag(self)
+        elif e.button() == Qt.MouseButton.RightButton:
+            self.app.quick_ask_at_cursor()  # a message just for him
 
     def mouseReleaseEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:

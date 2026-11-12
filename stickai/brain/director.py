@@ -140,8 +140,18 @@ class Director(QObject):
         return keys, any(has(w) for w in self.settings.group_words)
 
     # ------------------------------------------------------------- input
-    def handle(self, text: str, image: QImage | None = None) -> None:
-        """A message from the user (the chat window)."""
+    def cancel_thinking(self) -> bool:
+        """The stop button: drop the answer being thought up (and any follow-up rounds)."""
+        if self._pending is None or self._pending.get("tag") != "chat":
+            return False
+        self._finish_pending()
+        self._queued = None
+        self._last_user = time.monotonic()  # like a new message: follow-up rounds of a plan stop too
+        self.status.emit(tr("st.cancelled"))
+        return True
+
+    def handle(self, text: str, image: QImage | None = None, to: list[str] | None = None) -> None:
+        """A message from the user (the chat window). `to`: characters it's for (chips, right-click)."""
         text = text.strip()
         if not text and image is None:
             return
@@ -154,6 +164,8 @@ class Director(QObject):
             self._fight_stopped = self.app.fight.stop()
         keys, group = self.mentioned(text)
         targets = list(self.roster.characters) if group and not keys else keys
+        if to:  # picked in the chat / right-clicked: those, plus anyone named in the text
+            targets = list(dict.fromkeys([k for k in to if k in self.roster.characters] + targets))
 
         img_rel, payload = "", None
         if image is not None and not image.isNull():

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-11-13)
 
 - **Closing on the fishing rod:** to close or minimize a window (or close a browser tab) a stickman casts the rod
   at its ✕, flies up on the line, hangs under the button jabbing it, and drops off once it's pressed.

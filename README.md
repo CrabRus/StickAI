@@ -416,6 +416,10 @@ appear while they're being written. Install the extension from the `vscode/` fol
 python vscode/build.py --install
 ```
 
+Or download `stickai.vsix` from the [Releases](https://github.com/CrabRus/StickAI/releases) page and install it in
+VS Code: Extensions → **⋯** → **Install from VSIX…** (or `code --install-extension stickai.vsix`). The extension
+needs StickAI running on the same PC: it's the stickmen's window into VS Code, not a separate assistant.
+
 | what | how | chat (while VS Code is in use) |
 |---|---|---|
 | **Explain** | select code, **Ctrl+Alt+E** | "explain this code" / «объясни этот код» |

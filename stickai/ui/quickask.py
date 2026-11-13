@@ -5,8 +5,8 @@ Enter sends (the message also shows in the chat history), Esc or a click elsewhe
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from ..i18n import tr
@@ -17,12 +17,14 @@ class QuickAsk(QWidget):
     sent = Signal(str, str)  # character key, text
 
     def __init__(self, key: str, name: str, color: str):
-        super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)  # rounded corners: we paint the box
         self.key = key
+        self.color = QColor(color)
         self.setObjectName("QuickAsk")
         self.setStyleSheet(f"""
-QWidget#QuickAsk {{ background: {theme.SURFACE}; border: 1px solid {color}; border-radius: 10px; }}
 QLabel {{ color: {color}; font: 600 10pt 'Segoe UI'; background: transparent; }}
 QLineEdit {{ background: {theme.FIELD}; color: {theme.TEXT}; border: 1px solid {theme.BORDER}; border-radius: 8px;
              padding: 6px 8px; font: 10.5pt 'Segoe UI'; selection-background-color: {theme.ACCENT}; }}
@@ -58,6 +60,16 @@ QPushButton {{ background: {color}; color: #1b1b1b; border: none; border-radius:
         self.show()
         self.activateWindow()
         self.edit.setFocus()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(r, 14, 14)
+        p.fillPath(path, QColor(theme.SURFACE))
+        p.setPen(QPen(self.color, 1.6))
+        p.drawPath(path)
 
     def keyPressEvent(self, e) -> None:
         if e.key() == Qt.Key.Key_Escape:

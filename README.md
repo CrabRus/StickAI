@@ -17,7 +17,7 @@ start.bat
 **Without a console window:** build the launcher once:
 
 ```
-.venv\Scripts\python launcheruild.py
+.venv\Scripts\python launcher\build.py
 ```
 
 Then start StickAI with **`StickAI.exe`** in the project folder. You can pin it to the taskbar or make a shortcut.

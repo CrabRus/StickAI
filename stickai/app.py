@@ -723,7 +723,7 @@ class StickApp:
 
     def confirm_quit(self) -> None:
         if confirm(self.chat, tr("quit.title"), tr("quit.question"), tr("quit.yes"), tr("dlg.cancel"),
-                   kind="warning", accept_default=False):
+                   kind="warning", accept_default=True):  # Enter = quit
             self.qapp.quit()
 
     def settings_open(self) -> bool:
@@ -953,16 +953,23 @@ def _message_box(text: str) -> None:
 
 
 def _setup_logging() -> None:
-    """Log to the console; without one (StickAI.exe / pythonw) to %LOCALAPPDATA%/StickAI/stickai.log."""
-    fmt = "%(asctime)s %(levelname)s %(message)s"
-    if sys.stderr is not None:
-        logging.basicConfig(level=logging.INFO, format=fmt, datefmt="%H:%M:%S")
-        return
+    """Always to %LOCALAPPDATA%/StickAI/stickai.log (so problems can be looked at later), and to the
+    console too when there is one (start.bat). pythonw (StickAI.exe) has no console - but on new
+    Pythons it still has a sys.stderr that leads nowhere, so the console is checked, not stderr."""
+    import ctypes
     from logging.handlers import RotatingFileHandler
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     folder = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "StickAI"
-    folder.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(folder / "stickai.log", maxBytes=1_000_000, backupCount=1, encoding="utf-8")
-    logging.basicConfig(level=logging.INFO, format=fmt, datefmt="%Y-%m-%d %H:%M:%S", handlers=[handler])
+    handlers: list[logging.Handler] = []
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        handlers.append(RotatingFileHandler(folder / "stickai.log", maxBytes=2_000_000, backupCount=1, encoding="utf-8"))
+    except OSError:
+        pass
+    has_console = bool(ctypes.windll.kernel32.GetConsoleWindow()) and sys.stderr is not None
+    if has_console:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    logging.basicConfig(level=logging.INFO, format=fmt, datefmt="%Y-%m-%d %H:%M:%S", handlers=handlers or None)
 
     def hook(kind, value, tb):  # crashes go to the log instead of a console nobody sees
         logging.getLogger("stickai").critical("Unhandled error", exc_info=(kind, value, tb))

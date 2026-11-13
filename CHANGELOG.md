@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The log is always written to %LOCALAPPDATA%\StickAI\stickai.log (it wasn't when started from StickAI.exe).
 - **Arrivals:** a summoned character drops from the top, walks or runs in from a side, or jumps up out of the taskbar.
 - **Chat:**
   - select and copy messages (right-click menu);

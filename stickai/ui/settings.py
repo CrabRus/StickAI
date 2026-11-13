@@ -14,10 +14,11 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QSpinBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea,
-    QSlider, QTabWidget, QVBoxLayout, QWidget,
+    QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from ..brain.characters import BUBBLE_MODES, LANGUAGES, NOTIFY_CORNERS, VISION_MODES, Roster, load_defaults, save_roster
+from ..brain.characters import (ACTIVITIES, BUBBLE_MODES, CHAR_ACTIVITIES, LANGUAGES, NOTIFY_CORNERS, VISION_MODES,
+                                Roster, activity_map, load_defaults, save_roster)
 from ..i18n import tr
 from ..tools.files import default_folder
 from ..brain.gemini import character_keys, save_character_keys
@@ -59,6 +60,8 @@ QListWidget { background: #252932; color: #e9e9ea; border: none; border-radius: 
               padding: 4px; }
 QListWidget::item { padding: 8px 6px; border-radius: 6px; }
 QListWidget::item:selected { background: #3b4150; color: #ffffff; }
+QListWidget#Nav { font: 10.5pt 'Segoe UI'; }
+QListWidget#Nav::item { padding: 9px 8px; }
 QPushButton { background: #2f343e; color: #e9e9ea; border: 1px solid #3a3f4a; border-radius: 8px;
               padding: 6px 14px; font: 10pt 'Segoe UI'; }
 QPushButton:hover { background: #3a3f4a; }
@@ -142,16 +145,37 @@ class SettingsDialog(QDialog):
         self.setWindowTitle(tr("set.title"))
         self.setWindowIcon(app.tray.icon())
         self.setStyleSheet(STYLE.replace("CHECK_SVG", (Path(__file__).parent / "check.svg").as_posix()))
-        self.resize(780, 680)
+        theme.fit_window(self, 740, 640, min_w=560, min_h=360)
 
-        tabs = QTabWidget()
-        general = QScrollArea()  # scrolls on small screens
-        general.setWidgetResizable(True)
-        general.setWidget(self._general_page())
-        tabs.addTab(general, tr("set.tab_general"))
-        tabs.addTab(self._characters_page(), tr("set.tab_chars"))
-        tabs.addTab(self._memory_page(), tr("set.tab_memory"))
-        self.tabs = tabs
+        # a sidebar of topics + one narrow page each (no more one endless, very wide page)
+        self.nav = QListWidget()
+        self.nav.setObjectName("Nav")
+        self.nav.setFixedWidth(196)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.nav.setWordWrap(True)
+        self.stack = QStackedWidget()
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.stack.currentChanged.connect(lambda i: self.nav.currentRow() != i and self.nav.setCurrentRow(i))
+        pages = [("🏠", "set.page_general", self._general_page()),
+                 ("👥", "set.tab_chars", self._characters_page()),
+                 ("💬", "set.page_bubbles", self._bubbles_page()),
+                 ("🕺", "set.page_behavior", self._behavior_page()),
+                 ("🧠", "set.page_brain", self._brain_page()),
+                 ("🖱", "set.page_control", self._control_page()),
+                 ("📁", "set.page_files", self._files_page()),
+                 ("💻", "set.page_code", self._code_page()),
+                 ("🗂", "set.tab_memory", self._memory_page())]
+        for icon, key, page in pages:
+            self.nav.addItem(QListWidgetItem(f"{icon}  {tr(key)}"))
+            self.stack.addWidget(page)
+        self.nav.setCurrentRow(0)
+        self.tabs = self.stack  # app.open_settings(tab) / reopen_settings use .tabs
+        self._wire_dirty()
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        body.addWidget(self.nav)
+        body.addWidget(self.stack, 1)
 
         self.status = QLabel()
         self.status.setObjectName("Status")
@@ -173,55 +197,120 @@ class SettingsDialog(QDialog):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
-        lay.addWidget(tabs, 1)
+        lay.addLayout(body, 1)
         lay.addLayout(bottom)
         self.load_from_app()
 
     # ================================================================ pages
-    def _general_page(self) -> QWidget:
-        page = QWidget()
-        page.setObjectName("Page")
-        form = QFormLayout(page)
-        form.setContentsMargins(16, 16, 16, 16)
-        form.setVerticalSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+    # ---- helpers: a scrollable page with a heading; options with their explanation under them
+    def _page(self, title_key: str):
+        inner = QWidget()
+        inner.setObjectName("Page")
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(16, 12, 16, 16)
+        v.setSpacing(10)
+        head = QLabel(tr(title_key))
+        head.setObjectName("Section")
+        v.addWidget(head)
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)  # narrow: the label goes above the field
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        v.addLayout(form)
+        v.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        return scroll, form
 
+    def _opt(self, form, widget, text_key: str = "", indent: bool = False, hint_key: str = "") -> None:
+        """A checkbox (or any widget) on its own row; "Text (details)" becomes a short line + a grey hint."""
+        text = tr(text_key) if text_key else (widget.text() if isinstance(widget, QCheckBox) else "")
+        main, hint = text, tr(hint_key) if hint_key else ""
+        if "(" in text and text.rstrip().endswith(")") and isinstance(widget, QCheckBox):
+            i = text.index("(")
+            main, hint = text[:i].strip(), (text[i + 1:-1].strip() + (" " + hint if hint else "")).strip()
+        if isinstance(widget, QCheckBox):
+            widget.setText(main)
+        box = QWidget()
+        col = QVBoxLayout(box)
+        col.setContentsMargins(24 if indent else 0, 0, 0, 0)
+        col.setSpacing(2)
+        col.addWidget(widget)
+        if hint:
+            h = QLabel(hint[:1].upper() + hint[1:])
+            h.setObjectName("Hint")
+            h.setWordWrap(True)
+            h.setContentsMargins(24, 0, 0, 0)
+            col.addWidget(h)
+        if indent:
+            self._subs.append((widget, box))
+        form.addRow(box)
+
+    def _hint(self, form, key: str) -> None:
+        h = QLabel(tr(key))
+        h.setObjectName("Hint")
+        h.setWordWrap(True)
+        form.addRow(h)
+
+    # ---- pages
+    def _general_page(self) -> QWidget:
+        self._subs = []
+        page, form = self._page("set.page_general")
         self.lang = QComboBox()
         for code in LANGUAGES:
             self.lang.addItem(LANG_LABELS[code], code)
-        hint = QLabel(tr("set.language_hint"))
-        hint.setObjectName("Hint")
         form.addRow(tr("set.language"), self.lang)
-        form.addRow("", hint)
+        self._hint(form, "set.language_hint")
+        self.hotkey = QLineEdit()
+        self.hide_hotkey = QLineEdit()
+        form.addRow(tr("set.hotkey"), self.hotkey)
+        form.addRow(tr("set.hide_hotkey"), self.hide_hotkey)
+        self.on_top = QCheckBox(tr("set.on_top"))
+        self.spellcheck = QCheckBox(tr("set.spellcheck"))
+        self._opt(form, self.on_top)
+        self._opt(form, self.spellcheck)
+        # who is on the desktop when StickAI starts
+        self.start_with_box = QWidget()
+        self.start_with_lay = QHBoxLayout(self.start_with_box)
+        self.start_with_lay.setContentsMargins(0, 0, 0, 0)
+        self.start_with_checks: dict[str, QCheckBox] = {}
+        form.addRow(tr("set.start_with"), self.start_with_box)
+        reset = QPushButton(tr("set.reset_general"))
+        reset.clicked.connect(self._reset_general)
+        form.addRow(reset)
+        self._hint(form, "set.reset_hint")
+        return page
 
+    def _bubbles_page(self) -> QWidget:
+        page, form = self._page("set.page_bubbles")
         self.bubbles = QComboBox()
         for mode in BUBBLE_MODES:
             self.bubbles.addItem(tr(f"set.bubbles_{mode}"), mode)
         form.addRow(tr("set.bubbles"), self.bubbles)
+        self.bubble_time = _SliderBox(0.5, 3.0, 0.25, suffix=" ×")
+        form.addRow(tr("set.bubble_time"), self.bubble_time)
         self.notify = QCheckBox(tr("set.notify"))
         self.notify_sound = QCheckBox(tr("set.notify_sound"))
-        self.notify_sound.setStyleSheet("margin-left: 22px;")
+        self.quiet_coding = QCheckBox(tr("set.quiet_coding"))
         self.notify_corner = QComboBox()
         for c in NOTIFY_CORNERS:
             self.notify_corner.addItem(tr(f"set.corner_{c}"), c)
-        self.notify.toggled.connect(self.notify_sound.setEnabled)
-        self.notify.toggled.connect(self.notify_corner.setEnabled)
-        form.addRow("", self.notify)
-        form.addRow("", self.notify_sound)
+        self._opt(form, self.notify)
+        self._opt(form, self.notify_sound, indent=True)
+        self._opt(form, self.quiet_coding, indent=True)
         form.addRow(tr("set.notify_corner"), self.notify_corner)
-        for w in (self.notify, self.notify_sound):
-            w.toggled.connect(self._dirty)
-        self.notify_corner.currentIndexChanged.connect(self._dirty)
-        self.vision = QComboBox()
-        for mode in VISION_MODES:
-            self.vision.addItem(tr(f"set.vision_{mode}"), mode)
-        vhint = QLabel(tr("set.vision_hint"))
-        vhint.setObjectName("Hint")
-        vhint.setWordWrap(True)
-        form.addRow(tr("set.vision"), self.vision)
-        form.addRow("", vhint)
+        for w in (self.notify_sound, self.quiet_coding, self.notify_corner):
+            self.notify.toggled.connect(w.setEnabled)
+        return page
 
+    def _behavior_page(self) -> QWidget:
+        page, form = self._page("set.page_behavior")
         self.banter = QCheckBox(tr("set.banter"))
+        self._opt(form, self.banter)
         self.b_lo = QDoubleSpinBox()
         self.b_hi = QDoubleSpinBox()
         for b in (self.b_lo, self.b_hi):
@@ -234,77 +323,29 @@ class SettingsDialog(QDialog):
         rng.addWidget(QLabel("–"))
         rng.addWidget(self.b_hi)
         rng.addStretch(1)
-        form.addRow("", self.banter)
         form.addRow(tr("set.banter_range"), rng)
-
         self.react = QCheckBox(tr("set.react"))
         self.greet = QCheckBox(tr("set.greet"))
         self.widgets = QCheckBox(tr("set.widgets"))
         self.web = QCheckBox(tr("set.web"))
-        self.control = QCheckBox(tr("set.control"))
-        self.trust = QCheckBox(tr("set.trust"))
-        self.read_fields = QCheckBox(tr("set.read_fields"))
-        self.start_apps = QCheckBox(tr("set.start_apps"))
-        self.start_apps.setStyleSheet("margin-left: 22px;")
-        self.control.toggled.connect(self.start_apps.setEnabled)
-        self.read_fields.setStyleSheet("margin-left: 22px;")
-        self.control.toggled.connect(self.read_fields.setEnabled)
-        self.read_pages = QCheckBox(tr("set.read_pages"))
-        self.read_pages.setStyleSheet("margin-left: 22px;")
-        self.control.toggled.connect(self.read_pages.setEnabled)
-        self.clipboard = QCheckBox(tr("set.clipboard"))
-        self.reminders = QCheckBox(tr("set.reminders"))
-        self.apps = QPlainTextEdit()
-        self.apps.setPlaceholderText("Spotify = C:/Users/…/AppData/Roaming/Spotify/Spotify.exe\n"
-                                     "Notepad = notepad.exe")
-        self.apps.setFixedHeight(84)
-        self.apps.textChanged.connect(self._dirty)
-        apps_add = QPushButton(tr("set.apps_add"))
-        apps_add.clicked.connect(self._add_app)
-        self.files = QCheckBox(tr("set.files"))
-        self.trust_files = QCheckBox(tr("set.trust_files"))
-        self.trust_files.setStyleSheet("margin-left: 22px;")
-        self.files.toggled.connect(self.trust_files.setEnabled)
-        self.files_folder = QLineEdit()
-        self.files_folder.setPlaceholderText(default_folder())
-        browse = QPushButton(tr("set.browse"))
-        browse.clicked.connect(self._browse_folder)
-        self.files.toggled.connect(lambda on: (self.files_folder.setEnabled(on), browse.setEnabled(on)))
-        self._folder_row = QHBoxLayout()
-        self._folder_row.addWidget(self.files_folder, 1)
-        self._folder_row.addWidget(browse)
-        self.trust.setStyleSheet("margin-left: 22px;")  # visually a sub-option of control
-        self.control.toggled.connect(self.trust.setEnabled)
-        self.on_top = QCheckBox(tr("set.on_top"))
-        self.spellcheck = QCheckBox(tr("set.spellcheck"))
-        self.titles = QCheckBox(tr("set.titles"))
-        for cb in (self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.start_apps, self.read_fields,
-                   self.read_pages, self.clipboard, self.reminders, self.files, self.trust_files):
-            form.addRow("", cb)
-        form.addRow(tr("set.files_folder"), self._folder_row)
-        fh = QLabel(tr("set.files_hint"))
-        fh.setObjectName("Hint")
-        fh.setWordWrap(True)
-        form.addRow("", fh)
-        apps_col = QVBoxLayout()
-        apps_col.addWidget(self.apps)
-        apps_row = QHBoxLayout()
-        apps_hint = QLabel(tr("set.apps_hint"))
-        apps_hint.setObjectName("Hint")
-        apps_hint.setWordWrap(True)
-        apps_row.addWidget(apps_hint, 1)
-        apps_row.addWidget(apps_add, 0, Qt.AlignmentFlag.AlignTop)
-        apps_col.addLayout(apps_row)
-        form.addRow(tr("set.apps"), apps_col)
-        for cb in (self.on_top, self.spellcheck, self.titles):
-            form.addRow("", cb)
-
         self.couch = QCheckBox(tr("set.couch"))
-        form.addRow("", self.couch)
-        self.couch.toggled.connect(self._dirty)
-        self.vscode = QCheckBox(tr("set.vscode"))
-        form.addRow("", self.vscode)
-        self.vscode.toggled.connect(self._dirty)
+        for cb in (self.react, self.greet, self.widgets):
+            self._opt(form, cb)
+        self._opt(form, self.web, indent=True)
+        self.widgets.toggled.connect(self.web.setEnabled)
+        self._opt(form, self.couch)
+        sec = QLabel(tr("set.freq_section"))
+        sec.setObjectName("Section")
+        form.addRow(sec)
+        self._hint(form, "set.freq_hint")
+        self.freq = {}
+        for k in ACTIVITIES:
+            self.freq[k] = _SliderBox(0.0, 3.0, 0.1, suffix=" ×")
+            self.freq[k].box.valueChanged.connect(self._dirty)
+            form.addRow(tr(f"set.freq_{k}"), self.freq[k])
+        sec = QLabel(tr("set.music_section"))
+        sec.setObjectName("Section")
+        form.addRow(sec)
         self.music_file = QLineEdit()
         mbrowse = QPushButton(tr("set.browse"))
         mbrowse.clicked.connect(self._browse_music)
@@ -314,54 +355,147 @@ class SettingsDialog(QDialog):
         self.music_bpm = QSpinBox()
         self.music_bpm.setRange(40, 240)
         self.music_bpm.setFixedWidth(90)
+        self.music_out = QComboBox()
         form.addRow(tr("set.music"), mrow)
         form.addRow(tr("set.music_bpm"), self.music_bpm)
-        self.music_out = QComboBox()
         form.addRow(tr("set.music_out"), self.music_out)
-        self.music_out.activated.connect(self._dirty)
-        self.music_file.textEdited.connect(self._dirty)
-        self.music_bpm.valueChanged.connect(self._dirty)
-        self.hotkey = QLineEdit()
-        self.hide_hotkey = QLineEdit()
-        self.models = QLineEdit()
+        return page
+
+    def _brain_page(self) -> QWidget:
+        page, form = self._page("set.page_brain")
         self.brain = QComboBox()
         for key, models in BRAINS.items():
             self.brain.addItem(tr(f"set.brain_{key}"), models)
         self.brain.addItem(tr("set.brain_custom"), None)
         self.brain.activated.connect(self._brain_chosen)
-        form.addRow(tr("set.hotkey"), self.hotkey)
-        form.addRow(tr("set.hide_hotkey"), self.hide_hotkey)
+        self.models = QLineEdit()
         form.addRow(tr("set.brain"), self.brain)
         form.addRow(tr("set.models"), self.models)
-        bh = QLabel(tr("set.brain_hint"))
-        bh.setObjectName("Hint")
-        bh.setWordWrap(True)
-        form.addRow("", bh)
-        reset = QPushButton(tr("set.reset_general"))
-        reset.clicked.connect(self._reset_general)
-        hint = QLabel(tr("set.reset_hint"))
-        hint.setObjectName("Hint")
-        form.addRow("", reset)
-        form.addRow("", hint)
+        self._hint(form, "set.brain_hint")
+        self.temperature = _SliderBox(0.0, 1.5, 0.05)
+        form.addRow(tr("set.temperature"), self.temperature)
+        self._hint(form, "set.temperature_hint")
+        self.max_replies = QSpinBox()
+        self.max_replies.setRange(1, 4)
+        self.max_replies.setFixedWidth(90)
+        form.addRow(tr("set.max_replies"), self.max_replies)
+        self.history_lines = QSpinBox()
+        self.history_lines.setRange(4, 60)
+        self.history_lines.setFixedWidth(90)
+        form.addRow(tr("set.history_lines"), self.history_lines)
+        self.vision = QComboBox()
+        for mode in VISION_MODES:
+            self.vision.addItem(tr(f"set.vision_{mode}"), mode)
+        form.addRow(tr("set.vision"), self.vision)
+        self._hint(form, "set.vision_hint")
+        self.titles = QCheckBox(tr("set.titles"))
+        self.clipboard = QCheckBox(tr("set.clipboard"))
+        self._opt(form, self.titles)
+        self._opt(form, self.clipboard)
+        sec = QLabel(tr("set.memory_section"))
+        sec.setObjectName("Section")
+        form.addRow(sec)
+        self.summarize_every = QSpinBox()
+        self.summarize_every.setRange(6, 500)
+        self.summarize_every.setFixedWidth(90)
+        self.memory_facts = QSpinBox()
+        self.memory_facts.setRange(5, 200)
+        self.memory_facts.setFixedWidth(90)
+        form.addRow(tr("set.summarize_every"), self.summarize_every)
+        form.addRow(tr("set.memory_facts"), self.memory_facts)
+        return page
 
-        for w in (self.lang, self.bubbles, self.vision):
+    def _control_page(self) -> QWidget:
+        page, form = self._page("set.page_control")
+        self.control = QCheckBox(tr("set.control"))
+        self.trust = QCheckBox(tr("set.trust"))
+        self.start_apps = QCheckBox(tr("set.start_apps"))
+        self.read_fields = QCheckBox(tr("set.read_fields"))
+        self.read_pages = QCheckBox(tr("set.read_pages"))
+        self._opt(form, self.control)
+        for cb in (self.trust, self.start_apps, self.read_fields, self.read_pages):
+            self._opt(form, cb, indent=True)
+            self.control.toggled.connect(cb.setEnabled)
+        self.reminders = QCheckBox(tr("set.reminders"))
+        self._opt(form, self.reminders)
+        self.apps = QPlainTextEdit()
+        self.apps.setPlaceholderText("Spotify = C:/Users/…/AppData/Roaming/Spotify/Spotify.exe\n"
+                                     "Notepad = notepad.exe")
+        self.apps.setFixedHeight(84)
+        apps_add = QPushButton(tr("set.apps_add"))
+        apps_add.clicked.connect(self._add_app)
+        form.addRow(QLabel(tr("set.apps")))
+        form.addRow(self.apps)
+        apps_row = QHBoxLayout()
+        apps_hint = QLabel(tr("set.apps_hint"))
+        apps_hint.setObjectName("Hint")
+        apps_hint.setWordWrap(True)
+        apps_row.addWidget(apps_hint, 1)
+        apps_row.addWidget(apps_add, 0, Qt.AlignmentFlag.AlignTop)
+        form.addRow(apps_row)
+        return page
+
+    def _files_page(self) -> QWidget:
+        page, form = self._page("set.page_files")
+        self.files = QCheckBox(tr("set.files"))
+        self.trust_files = QCheckBox(tr("set.trust_files"))
+        self._opt(form, self.files)
+        self._opt(form, self.trust_files, indent=True)
+        self.files.toggled.connect(self.trust_files.setEnabled)
+        self.files_folder = QLineEdit()
+        self.files_folder.setPlaceholderText(default_folder())
+        browse = QPushButton(tr("set.browse"))
+        browse.clicked.connect(self._browse_folder)
+        self.files.toggled.connect(lambda on: (self.files_folder.setEnabled(on), browse.setEnabled(on)))
+        self._folder_row = QHBoxLayout()
+        self._folder_row.addWidget(self.files_folder, 1)
+        self._folder_row.addWidget(browse)
+        form.addRow(tr("set.files_folder"), self._folder_row)
+        self._hint(form, "set.files_hint")
+        self._hint(form, "set.files_skill_hint")
+        return page
+
+    def _code_page(self) -> QWidget:
+        page, form = self._page("set.page_code")
+        self.vscode = QCheckBox(tr("set.vscode"))
+        self.code_watch = QCheckBox(tr("set.code_watch"))
+        self.save_hints = QCheckBox(tr("set.save_hints"))
+        self._opt(form, self.vscode)
+        for cb in (self.code_watch, self.save_hints):
+            self._opt(form, cb, indent=True)
+            self.vscode.toggled.connect(cb.setEnabled)
+        self.coder = QComboBox()
+        form.addRow(tr("set.coder"), self.coder)
+        self._hint(form, "set.code_install_hint")
+        return page
+
+    def _wire_dirty(self) -> None:
+        for w in (self.lang, self.bubbles, self.vision, self.notify_corner, self.coder):
             w.currentIndexChanged.connect(self._dirty)
+        self.music_out.activated.connect(self._dirty)
         for w in (self.banter, self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
                   self.trust_files, self.on_top, self.spellcheck, self.titles, self.read_fields, self.start_apps,
-                  self.read_pages, self.clipboard,
-                  self.reminders):
+                  self.read_pages, self.clipboard, self.reminders, self.couch, self.vscode, self.code_watch,
+                  self.save_hints, self.notify, self.notify_sound, self.quiet_coding):
             w.toggled.connect(self._dirty)
-        for w in (self.b_lo, self.b_hi):
+        for w in (self.b_lo, self.b_hi, self.music_bpm, self.max_replies, self.history_lines, self.summarize_every,
+                  self.memory_facts):
             w.valueChanged.connect(self._dirty)
-        for w in (self.hotkey, self.hide_hotkey, self.models, self.files_folder):
+        for w in (self.bubble_time, self.temperature):
+            w.box.valueChanged.connect(self._dirty)
+        for w in (self.hotkey, self.hide_hotkey, self.models, self.files_folder, self.music_file):
             w.textEdited.connect(self._dirty)
-        return page
+        self.apps.textChanged.connect(self._dirty)
 
     def _characters_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("Page")
         self.list = QListWidget()
-        self.list.setFixedWidth(170)
+        self.list.setFlow(QListWidget.Flow.LeftToRight)
+        self.list.setWrapping(True)
+        self.list.setFixedHeight(52)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.currentRowChanged.connect(self._select_row)
 
         form_w = QWidget()
@@ -369,7 +503,8 @@ class SettingsDialog(QDialog):
         form = QFormLayout(form_w)
         form.setContentsMargins(12, 4, 12, 12)
         form.setVerticalSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)  # narrow column: labels above the fields
 
         self.c_name = QLineEdit()
         self.c_aliases = QLineEdit()
@@ -434,15 +569,25 @@ class SettingsDialog(QDialog):
         sec.setObjectName("Section")
         form.addRow(sec)
         form.addRow(self.c_memory)
+        sec = QLabel(tr("ch.freq_section"))
+        sec.setObjectName("Section")
+        form.addRow(sec)
+        fh = QLabel(tr("ch.freq_hint"))
+        fh.setObjectName("Hint")
+        fh.setWordWrap(True)
+        form.addRow(fh)
+        self.c_freq = {}
+        for k in CHAR_ACTIVITIES:
+            self.c_freq[k] = _SliderBox(0.0, 3.0, 0.1, suffix=" ×")
+            self.c_freq[k].box.valueChanged.connect(self._char_edited)
+            form.addRow(tr(f"set.freq_{k}"), self.c_freq[k])
         form.addRow(self.c_presence)
         self.c_reset = QPushButton(tr("ch.reset"))
         self.c_reset.clicked.connect(self._reset_character)
         reset_all = QPushButton(tr("ch.reset_all"))
         reset_all.clicked.connect(self._reset_all_characters)
-        resets = QHBoxLayout()
-        resets.addWidget(self.c_reset)
-        resets.addWidget(reset_all)
-        form.addRow(resets)
+        form.addRow(self.c_reset)  # one under the other: two long buttons side by side made the page too wide
+        form.addRow(reset_all)
         hint = QLabel(tr("set.reset_hint"))
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -450,8 +595,9 @@ class SettingsDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(form_w)
-        lay = QHBoxLayout(page)
+        lay = QVBoxLayout(page)  # the characters in a row on top: the form gets the whole width
         lay.setContentsMargins(10, 10, 10, 10)
         lay.addWidget(self.list)
         lay.addWidget(scroll, 1)
@@ -514,6 +660,9 @@ class SettingsDialog(QDialog):
         self.notify.setChecked(s.notify)
         self.notify_sound.setChecked(s.notify_sound)
         self.notify_sound.setEnabled(s.notify)
+        self.quiet_coding.setChecked(s.quiet_coding)
+        self.quiet_coding.setEnabled(s.notify)
+        self.bubble_time.set_value(s.bubble_time)
         self.notify_corner.setCurrentIndex(max(0, self.notify_corner.findData(s.notify_corner)))
         self.notify_corner.setEnabled(s.notify)
         self.banter.setChecked(s.banter)
@@ -544,6 +693,10 @@ class SettingsDialog(QDialog):
         self._fill_outputs(s.music_output)
         self.couch.setChecked(s.couch)
         self.vscode.setChecked(s.vscode)
+        self.code_watch.setChecked(s.code_watch)
+        self.code_watch.setEnabled(s.vscode)
+        self.save_hints.setChecked(s.save_hints)
+        self.save_hints.setEnabled(s.vscode)
         self.files_folder.setEnabled(s.files)
         self.vision.setCurrentIndex(max(0, self.vision.findData(s.vision)))
         self.on_top.setChecked(s.chat_on_top)
@@ -552,6 +705,29 @@ class SettingsDialog(QDialog):
         self.hotkey.setText(s.hotkey)
         self.hide_hotkey.setText(s.hide_hotkey)
         self.models.setText(", ".join(s.models))
+        self.temperature.set_value(s.temperature)
+        every = activity_map(s.activity)
+        for k, w in self.freq.items():
+            w.set_value(every.get(k, 1.0))
+        self.max_replies.setValue(s.max_replies)
+        self.history_lines.setValue(s.history_lines)
+        self.summarize_every.setValue(s.summarize_every)
+        self.memory_facts.setValue(s.memory_facts)
+        self.web.setEnabled(s.widgets)
+        # who starts on the desktop, and who helps with code: one entry per character
+        for cb in self.start_with_checks.values():
+            cb.deleteLater()
+        self.start_with_checks = {}
+        for k, c in self.draft.characters.items():
+            cb = QCheckBox(c.display_name)
+            cb.setChecked(k in s.start_with)
+            cb.toggled.connect(self._dirty)
+            self.start_with_lay.addWidget(cb)
+            self.start_with_checks[k] = cb
+        self.coder.clear()
+        for k, c in self.draft.characters.items():
+            self.coder.addItem(_dot(c.color), c.display_name, k)
+        self.coder.setCurrentIndex(max(0, self.coder.findData(s.coder)))
         idx = next((i for i in range(self.brain.count()) if self.brain.itemData(i) == list(s.models)), self.brain.count() - 1)
         self.brain.setCurrentIndex(idx)
         keep = self.current
@@ -604,6 +780,9 @@ class SettingsDialog(QDialog):
         self.c_energy.set_value(c.energy)
         self.c_climb.set_value(c.climb_chance)
         self.c_restless.set_value(c.restlessness)
+        own = activity_map(c.activity)
+        for k, w in self.c_freq.items():
+            w.set_value(own.get(k, 1.0))
         self.c_personality.setPlainText(c.personality)
         self.c_voice.setPlainText(c.voice)
         self.c_apikey.setText(self._char_keys.get(key, ""))
@@ -634,6 +813,7 @@ class SettingsDialog(QDialog):
         c = replace(c, display_name=self.c_name.text().strip() or c.key.title(), aliases=aliases,
                     size=self.c_size.value(), walk_speed=self.c_walk.value(), energy=self.c_energy.value(),
                     climb_chance=self.c_climb.value(), restlessness=self.c_restless.value(),
+                    activity=tuple((k, round(w.value(), 2)) for k, w in self.c_freq.items()),
                     personality=self.c_personality.toPlainText().strip(), voice=self.c_voice.toPlainText().strip())
         self.draft = self.draft.with_character(c)
         item = self.list.currentItem()
@@ -708,6 +888,7 @@ class SettingsDialog(QDialog):
             language=self.lang.currentData(), bubbles=self.bubbles.currentData(), banter=self.banter.isChecked(),
             notify=self.notify.isChecked(), notify_sound=self.notify_sound.isChecked(),
             notify_corner=self.notify_corner.currentData() or "bottom-right",
+            quiet_coding=self.quiet_coding.isChecked(), bubble_time=self.bubble_time.value(),
             banter_every=(max(30.0, lo), max(30.0, hi)), react_to_throws=self.react.isChecked(),
             greet_on_arrival=self.greet.isChecked(), read_fields=self.read_fields.isChecked(),
             read_pages=self.read_pages.isChecked(),
@@ -717,8 +898,13 @@ class SettingsDialog(QDialog):
             vision=self.vision.currentData(), control=self.control.isChecked(), trust_windows=self.trust.isChecked(),
             files=self.files.isChecked(), trust_files=self.trust_files.isChecked(),
             files_folder=self.files_folder.text().strip(),
-            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), vscode=self.vscode.isChecked(), share_window_titles=self.titles.isChecked(),
-            hotkey=hotkey, hide_hotkey=hide_hotkey, models=models)
+            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), vscode=self.vscode.isChecked(), code_watch=self.code_watch.isChecked(), save_hints=self.save_hints.isChecked(), share_window_titles=self.titles.isChecked(),
+            hotkey=hotkey, hide_hotkey=hide_hotkey, models=models,
+            temperature=round(self.temperature.value(), 2), max_replies=self.max_replies.value(),
+            activity=tuple((k, round(w.value(), 2)) for k, w in self.freq.items()),
+            history_lines=self.history_lines.value(), summarize_every=self.summarize_every.value(),
+            memory_facts=self.memory_facts.value(), coder=self.coder.currentData() or self.draft.settings.coder,
+            start_with=tuple(k for k, cb in self.start_with_checks.items() if cb.isChecked()))
         try:
             save_roster(self.app.characters_path, self.draft)
             keys = {k: v for k, v in self._char_keys.items() if v and k in self.draft.characters}
@@ -810,3 +996,4 @@ class SettingsDialog(QDialog):
             x = min(max(c.x() - self.width() // 2, geo.left() + 8), geo.right() - self.width() - 8)
             y = min(max(c.y() - self.height() // 2, geo.top() + 8), geo.bottom() - self.height() - 8)
             self.move(x, y)
+        theme.keep_on_screen(self)

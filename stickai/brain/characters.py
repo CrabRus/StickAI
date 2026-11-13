@@ -5,6 +5,8 @@ settings window uses this), regenerating the explanatory comments.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import re
 import tomllib
@@ -14,7 +16,29 @@ from pathlib import Path
 LANGUAGES = {"en": "English", "ru": "Russian", "sk": "Slovak"}
 # The sheet as shipped; "Reset to defaults" in the settings window restores from it.
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "defaults" / "characters.default.toml"
+log = logging.getLogger("stickai.characters")
 BUBBLE_MODES = ("full", "indicator", "off")
+# How often they do things on their own: a multiplier per activity (0 = never, 1 = normal, 3 = 3x as often).
+ACTIVITIES = ("look", "rest", "run", "jump", "hop", "rod", "climb")
+CHAR_ACTIVITIES = ACTIVITIES[:-1]   # per character, climbing is the "climbs windows" slider already
+
+
+def _activity(raw, keys, where: str) -> tuple[tuple[str, float], ...]:
+    """{rest = 0.5, run = 2} -> (("rest", 0.5), ("run", 2.0)); unknown keys / bad numbers are dropped."""
+    if not isinstance(raw, dict):
+        return ()
+    out = []
+    for k in keys:
+        if k in raw:
+            try:
+                out.append((k, min(max(float(raw[k]), 0.0), 3.0)))
+            except (TypeError, ValueError):
+                log.warning("%s activity.%s must be a number", where, k)
+    return tuple(out)
+
+
+def activity_map(pairs) -> dict[str, float]:
+    return {k: v for k, v in pairs}
 NOTIFY_CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
 VISION_MODES = ("off", "ask", "auto")
 
@@ -30,6 +54,7 @@ class CharacterSpec:
     energy: float = 1.0
     climb_chance: float = 0.85
     restlessness: float = 1.0
+    activity: tuple[tuple[str, float], ...] = ()   # how often this one does things (x the global setting)
     personality: str = ""
     voice: str = ""
 
@@ -86,6 +111,7 @@ class Settings:
     notify_corner: str = "bottom-right"
     quiet_coding: bool = True    # no pop-up notifications while VS Code is the window in front
     bubble_time: float = 1.0     # how long speech bubbles stay up (x reading time)
+    activity: tuple[tuple[str, float], ...] = ()   # how often everybody does things on their own
     vscode: bool = True          # link with the StickAI extension for VS Code (code explanations)
     coder: str = "yellow"        # the character who helps with code
     code_watch: bool = True      # react to commands run in VS Code's terminal (explain errors, cheer for tests)
@@ -195,6 +221,7 @@ def load_roster(path: Path) -> Roster:
         notify_corner=_choice(s.get("notify_corner", d.notify_corner), NOTIFY_CORNERS, "notify_corner"),
         quiet_coding=bool(s.get("quiet_coding", d.quiet_coding)),
         bubble_time=float(_clamp(s.get("bubble_time", d.bubble_time), 0.5, 3.0, "bubble_time")),
+        activity=_activity(s.get("activity", {}), ACTIVITIES, "[settings]"),
         vscode=bool(s.get("vscode", d.vscode)),
         coder=str(s.get("coder", d.coder)).strip().lower() or d.coder,
         code_watch=bool(s.get("code_watch", d.code_watch)),
@@ -218,6 +245,7 @@ def load_roster(path: Path) -> Roster:
             energy=_clamp(c.get("energy", 1.0), 0.0, 2.0, f"{where} energy"),
             climb_chance=_clamp(c.get("climb_chance", 0.85), 0.0, 1.0, f"{where} climb_chance"),
             restlessness=_clamp(c.get("restlessness", 1.0), 0.0, 10.0, f"{where} restlessness"),
+            activity=_activity(c.get("activity", {}), CHAR_ACTIVITIES, where),
             personality=_prose(c.get("personality", "")),
             voice=_prose(c.get("voice", "")),
         )
@@ -254,6 +282,12 @@ def _apps(v) -> tuple[tuple[str, str], ...]:
 
 def _list(vs) -> str:
     return "[" + ", ".join(_str(str(x)) for x in vs) + "]"
+
+
+def _inline_table(pairs, keys=None) -> str:
+    m = activity_map(pairs)
+    keys = keys or [k for k, _v in pairs]
+    return "{" + ", ".join(f"{k} = {_num(m.get(k, 1.0))}" for k in keys) + "}"
 
 
 def _num(v: float) -> str:
@@ -377,6 +411,9 @@ def save_roster(path: Path, roster: Roster) -> None:
         f"quiet_coding = {str(s.quiet_coding).lower()}",
         "# How long speech bubbles stay above their heads: 1.0 = reading time, 2.0 = twice as long (0.5 .. 3).",
         f"bubble_time = {s.bubble_time:g}",
+        "# How often they do things on their own, for everybody (x per character): 0 = never, 1 = normal, 3 = 3x.",
+        "# look around, rest (sit down), run, jump, hop onto fields, rod (fishing rod), climb windows",
+        f"activity = {_inline_table(s.activity, ACTIVITIES)}",
         "",
         "# Code helper in VS Code (install the extension from the vscode/ folder). Code you ask",
         "# about is sent to Gemini only when you ask; `coder` is the character who explains it.",
@@ -420,6 +457,7 @@ def save_roster(path: Path, roster: Roster) -> None:
             f"energy = {_num(c.energy)}",
             f"climb_chance = {_num(c.climb_chance)}",
             f"restlessness = {_num(c.restlessness)}",
+            *([f"activity = {_inline_table(c.activity)}"] if any(v != 1.0 for _k, v in c.activity) else []),
             f"personality = {_ml(c.personality)}",
             f"voice = {_ml(c.voice)}",
         ]

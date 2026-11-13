@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **How often they do things:** in Settings → Behaviour for everybody (look around, rest, run, jump, hop onto
+  fields, fishing rod, climb windows), and per character on the Characters page. 0 means never, 1 is the usual,
+  3 is three times as often, and the two multiply. Stored as `activity = {...}` in characters.toml.
+- **Settings window rebuilt:**
+  - narrower, with a sidebar of 9 topics: General, Characters, Speech, Behaviour, Brain, Control of the PC,
+    Files, Code, Memory;
+  - every option is a short line with its explanation under it;
+  - settings that were only in characters.toml can now be set here too: who starts on the desktop,
+    creativity (temperature), replies per message, chat lines sent, memory folding, facts kept, and who helps
+    with code.
 - VS Code panel: **/help** (also "что ты умеешь", "список команд") lists everything locally; slash commands
   /explain /comment /hint /quiz /review /run /terminal /error work in the question box.
 - **Run with StickAI** (Ctrl+Alt+Enter / ▶): builds and runs C, C++, Python and JS in its own terminal (input
@@ -11,6 +21,7 @@
 - New panel / tab icon: a stickman with a laptop.
 - Fixed: the VS Code panel stayed empty on a new request (it removed its own hint line, then crashed on it).
 - **"What went wrong in the terminal?"** (Ctrl+Alt+T, terminal right-click, or «что в терминале?» in the chat).
+- Settings: no pop-up notifications while coding (VS Code in front); how long speech bubbles stay.
 - Speech bubbles glide after a moving stickman (no more jumps in steps while he walks and thinks); at rest
   they stay still.
 - Small screens (laptops): the chat, settings and reading windows are never bigger than the screen and are

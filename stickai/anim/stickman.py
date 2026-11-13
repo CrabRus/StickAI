@@ -123,6 +123,7 @@ class Stickman:
         self.target_x: float | None = None  # walking over to someone
         self.target_until = 0.0
         self.talking_until = 0.0   # while he talks he stays put (no wandering, hops or climbs)
+        self.freq: dict[str, float] = {}  # how often he does things on his own (Settings -> Behaviour)
         # fighting (driven by activities/fight.py): a stance + one move at a time
         self.fighting = False      # in a fight: fists up, no wandering off on his own
         self.fight_move = ""       # punch | kick | block | hit | jump_kick | ""
@@ -653,20 +654,30 @@ class Stickman:
             else:
                 # spontaneous behaviour, flavoured by personality
                 lazy = max(0.0, 2.0 - self.energy)
-                roll = random.random()
-                if roll < dt * self.restlessness / 9.0:  # stop and look around
-                    self.idle_for = random.uniform(0.8, 2.2)
-                    self.set_state(State.IDLE)
-                elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0):
-                    self.sit(random.uniform(5.0, 12.0) * (0.6 + 0.4 * lazy))
-                elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0 + self.energy / 30.0):
-                    self.run(random.uniform(1.5, 4.0))
-                elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0 + self.energy / 18.0):
-                    self.jump()
-                elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0 + self.energy / 18.0 + 0.08):
-                    self.hop_to_widget(scene)
-                elif roll < dt * (self.restlessness / 9.0 + lazy / 40.0 + self.energy / 18.0 + 0.08 + self.energy / 45.0):
-                    self.try_grapple(scene)  # fishing rod: up onto a window, or hang from the top
+                f = self.freq.get
+                # chances per second, from personality, times the "how often" settings (0 = never)
+                rates = (("look", self.restlessness / 9.0), ("rest", lazy / 40.0 + 0.004),
+                         ("run", self.energy / 30.0), ("jump", self.energy / 45.0), ("hop", 0.08),
+                         ("rod", self.energy / 45.0))
+                roll, acc = random.random(), 0.0
+                for name, rate in rates:
+                    acc += rate * f(name, 1.0) * dt
+                    if roll >= acc:
+                        continue
+                    if name == "look":  # stop and look around
+                        self.idle_for = random.uniform(0.8, 2.2)
+                        self.set_state(State.IDLE)
+                    elif name == "rest":
+                        self.sit(random.uniform(5.0, 12.0) * (0.6 + 0.4 * lazy))
+                    elif name == "run":
+                        self.run(random.uniform(1.5, 4.0))
+                    elif name == "jump":
+                        self.jump()
+                    elif name == "hop":
+                        self.hop_to_widget(scene)
+                    else:
+                        self.try_grapple(scene)  # fishing rod: up onto a window, or hang from the top
+                    break
         elif st == State.TURNING:
             self.speed = max(0.0, self.speed - 6.0 * h * dt)
             if not self._turned and self.state_time > 0.18:

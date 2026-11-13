@@ -458,8 +458,12 @@ class StickApp:
         if spec is None:
             return
         s.name, s.color = spec.display_name, spec.color
-        s.walk_speed, s.climb_chance, s.restlessness = spec.walk_speed, spec.climb_chance, spec.restlessness
+        s.walk_speed, s.restlessness = spec.walk_speed, spec.restlessness
         s.energy = spec.energy
+        from .brain.characters import activity_map
+        every, own = activity_map(self.roster.settings.activity), activity_map(spec.activity)
+        s.freq = {k: every.get(k, 1.0) * own.get(k, 1.0) for k in ("look", "rest", "run", "jump", "hop", "rod")}
+        s.climb_chance = min(1.0, spec.climb_chance * every.get("climb", 1.0))
         scale = self.hud_overlay.scale if self.hud_overlay else 1.0
         s.set_height(config.STICKMAN_HEIGHT_DIP * scale * spec.size)  # grows/shrinks live
         if s.key in self.bubbles:

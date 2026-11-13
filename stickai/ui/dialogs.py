@@ -118,6 +118,7 @@ class StickDialog(QDialog):
         theme.dark_title_bar(self)
         super().showEvent(e)
         owner = self.parentWidget()
+        theme.keep_on_screen(self)
         if owner is not None and owner.isVisible():  # centre over the owner, kept on its screen
             geo = owner.screen().availableGeometry()
             c = owner.frameGeometry().center()

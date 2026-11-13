@@ -13,8 +13,11 @@
 - **"What went wrong in the terminal?"** (Ctrl+Alt+T, terminal right-click, or «что в терминале?» in the chat).
 - Speech bubbles glide after a moving stickman (no more jumps in steps while he walks and thinks); at rest
   they stay still.
+- Small screens (laptops): the chat, settings and reading windows are never bigger than the screen and are
+  moved back inside it when opened (e.g. after being left somewhere on a bigger monitor).
 - Speech bubbles appear already in place (no jump on the first frame or when the text replaces the dots);
   a character stops at once when he starts talking.
+- The chat window opens at the top right.
 - **Code coach (VS Code extension 0.3):**
   - test runs in VS Code's terminal: cheering when they pass, a facepalm when they fail;
   - a failed command: a one-line hint in a bubble, and a click opens the line;

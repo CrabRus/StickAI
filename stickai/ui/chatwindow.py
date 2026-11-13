@@ -286,7 +286,7 @@ class ChatWindow(QWidget):
         self.setObjectName("ChatWindow")
         self.setStyleSheet(STYLE)
         self.setAcceptDrops(True)
-        self.resize(440, 640)
+        theme.fit_window(self, 440, 640, min_w=340, min_h=360)
         self._attached: QImage | None = None
         self._last_session = ""
         self._last_char = ""
@@ -509,12 +509,14 @@ class ChatWindow(QWidget):
         if not self.isVisible():
             geo = QGuiApplication.primaryScreen().availableGeometry()
             if not getattr(self, "_placed", False):
-                self.move(geo.right() - self.width() - 24, geo.bottom() - self.height() - 24)
+                theme.fit_window(self, 440, 640, min_w=340, min_h=360)
+                self.move(geo.right() - self.width() - 24, geo.top() + 16)  # top right: out of the stickmen's way
                 self._placed = True
         if self.isMinimized():  # minimized with the title-bar button: un-minimize, don't just "show"
             self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
             ctypes.windll.user32.ShowWindow(int(self.winId()), 9)  # SW_RESTORE
         self.show()
+        theme.keep_on_screen(self)  # e.g. moved there on a bigger monitor, now on the laptop screen
         self.raise_()
         self.activateWindow()
         ctypes.windll.user32.SetForegroundWindow(int(self.winId()))  # allowed right after our hotkey

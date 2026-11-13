@@ -27,6 +27,39 @@ QMenu::indicator:checked {{ background: {ACCENT}; border-radius: 3px; }}
 QMenu::indicator:unchecked {{ border: 1px solid {BORDER}; border-radius: 3px; }}
 """
 
+TITLE_BAR = 34   # logical px a window's title bar + frame add around its client area (approx.)
+
+
+def _screen_geo(widget):
+    from PySide6.QtGui import QCursor, QGuiApplication
+    scr = widget.screen() if widget.isVisible() else (QGuiApplication.screenAt(QCursor.pos())
+                                                       or QGuiApplication.primaryScreen())
+    return scr.availableGeometry()
+
+
+def fit_window(widget, w: int, h: int, min_w: int = 320, min_h: int = 300) -> None:
+    """Resize to w x h, but never bigger than the screen it opens on (laptops: nothing off-screen)."""
+    geo = _screen_geo(widget)
+    max_w, max_h = int(geo.width() * 0.96), int(geo.height() - TITLE_BAR - 16)
+    widget.setMinimumSize(min(min_w, max_w), min(min_h, max_h))
+    widget.resize(min(w, max_w), min(h, max_h))
+
+
+def keep_on_screen(widget) -> None:
+    """Shrink / move a window back inside the available area of its screen (title bar included)."""
+    geo = _screen_geo(widget)
+    max_w, max_h = geo.width() - 16, geo.height() - TITLE_BAR - 8
+    if widget.width() > max_w or widget.height() > max_h:
+        widget.resize(min(widget.width(), max_w), min(widget.height(), max_h))
+    fr = widget.frameGeometry()
+    extra_w, extra_h = (fr.width() - widget.width(), fr.height() - widget.height()) if widget.isVisible()         else (2, TITLE_BAR)
+    fw, fh = widget.width() + extra_w, widget.height() + extra_h
+    x = min(max(fr.x(), geo.left() + 4), geo.right() - fw - 4)
+    y = min(max(fr.y(), geo.top() + 4), geo.bottom() - fh - 4)
+    if (x, y) != (fr.x(), fr.y()):
+        widget.move(x, y)
+
+
 _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_CAPTION_COLOR = 35
 _DWMWA_TEXT_COLOR = 36

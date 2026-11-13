@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Closing on the fishing rod:** to close or minimize a window (or close a browser tab) a stickman casts the rod
+  at its ✕, flies up on the line, hangs under the button jabbing it, and drops off once it's pressed.
+- **Spelling helper points at the typo:** "check the spelling in that field" now goes to each typo, stands on the
+  line next to it jabbing at it, and offers the fix in a bubble (click = fix that word). Word positions come from
+  the field's Text pattern, or from classic text boxes themselves (scaled for old non-DPI-aware apps).
+- **Spelling watch** (opt-in, Settings → Control): while you type in another app's field, a stickman points at a
+  finished misspelled word and offers the fix. Read locally about once a second, checked on this PC.
+- **Cards while you're away:** after 2 minutes without mouse / keyboard (not while watching a video) they sit
+  down at a card table and play; touching the mouse or keyboard ends it. Also "play cards" in the chat.
+  Settings → Behaviour.
+- Fixed: the "StickAI is already running" check never ran, so a second start ran two copies side by side.
 - **How often they do things:** in Settings → Behaviour for everybody (look around, rest, run, jump, hop onto
   fields, fishing rod, climb windows), and per character on the Characters page. 0 means never, 1 is the usual,
   3 is three times as often, and the two multiply. Stored as `activity = {...}` in characters.toml.

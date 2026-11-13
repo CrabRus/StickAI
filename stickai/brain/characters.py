@@ -94,6 +94,7 @@ class Settings:
     control: bool = False       # may close/minimize/open windows and type, after you allow each action
     trust_windows: bool = False  # ...open/close/show/hide windows WITHOUT asking (typing still asks)
     read_fields: bool = False    # ...check spelling in other apps' text fields (reads that one field, locally)
+    spell_watch: bool = False    # ...and watch the field you type in: point at typos, offer the fix
     read_pages: bool = False     # ...read the open web page's text when asked (sent to Google like the chat)
     start_apps: bool = True      # ...open any app from the Start menu by name (asks unless trusted)
     clipboard: bool = False      # read / replace what you copied, only when your message mentions it
@@ -106,6 +107,8 @@ class Settings:
     music_bpm: int = 110         # beats per minute: how often the boxes are struck
     music_output: str = ""       # "" = Windows default, "auto-speakers", or an output device name
     couch: bool = True           # sit on a couch together when you watch videos
+    cards: bool = True           # play cards at a table when you're away from the PC for a while
+    cards_after: float = 2.0     # ...after this many minutes without the mouse / keyboard
     notify: bool = True          # while the chat is closed, their lines pop up in a corner
     notify_sound: bool = False   # ...with the Windows notification sound
     notify_corner: str = "bottom-right"
@@ -204,6 +207,7 @@ def load_roster(path: Path) -> Roster:
         control=bool(s.get("control", d.control)),
         trust_windows=bool(s.get("trust_windows", d.trust_windows)),
         read_fields=bool(s.get("read_fields", d.read_fields)),
+        spell_watch=bool(s.get("spell_watch", d.spell_watch)),
         read_pages=bool(s.get("read_pages", d.read_pages)),
         start_apps=bool(s.get("start_apps", d.start_apps)),
         clipboard=bool(s.get("clipboard", d.clipboard)),
@@ -216,6 +220,8 @@ def load_roster(path: Path) -> Roster:
         music_bpm=int(_clamp(s.get("music_bpm", d.music_bpm), 40, 240, "music_bpm")),
         music_output=str(s.get("music_output", d.music_output)),
         couch=bool(s.get("couch", d.couch)),
+        cards=bool(s.get("cards", d.cards)),
+        cards_after=float(_clamp(s.get("cards_after", d.cards_after), 0.5, 60.0, "cards_after")),
         notify=bool(s.get("notify", d.notify)),
         notify_sound=bool(s.get("notify_sound", d.notify_sound)),
         notify_corner=_choice(s.get("notify_corner", d.notify_corner), NOTIFY_CORNERS, "notify_corner"),
@@ -369,6 +375,9 @@ def save_roster(path: Path, roster: Roster) -> None:
         "# With control on: check spelling in a text field of another app when you ask. Reads only",
         "# that field's text, checked on your PC by the Windows spell checker (never sent anywhere).",
         f"read_fields = {str(s.read_fields).lower()}",
+        "# ...and while you type in another app's field: point at a typo and offer the fix (click the bubble).",
+        "# The field is read about once a second, checked on this PC, never sent anywhere.",
+        f"spell_watch = {str(s.spell_watch).lower()}",
         "# With control on: read the text of the web page open in your browser when you ask",
         "# (\"summarize this page\"). The text is sent to Google with that request.",
         f"read_pages = {str(s.read_pages).lower()}",
@@ -401,6 +410,9 @@ def save_roster(path: Path, roster: Roster) -> None:
         "",
         "# When you watch something (fullscreen, YouTube, Netflix, VLC...), they gather on a couch.",
         f"couch = {str(s.couch).lower()}",
+        "# When you're away for a while (no mouse / keyboard), they sit down at a table and play cards.",
+        f"cards = {str(s.cards).lower()}",
+        f"cards_after = {_num(s.cards_after)}  # minutes",
         "",
         "# While the chat window is closed, what they say pops up in a corner of the screen",
         "# (corner: bottom-right, bottom-left, top-right, top-left), optionally with a sound.",

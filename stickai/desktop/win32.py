@@ -313,3 +313,16 @@ def is_per_monitor_v2() -> bool:
 def set_timer_resolution(enable: bool) -> None:
     """1 ms scheduler granularity so a 16 ms frame timer doesn't drift to 31 ms."""
     (winmm.timeBeginPeriod if enable else winmm.timeEndPeriod)(1)
+
+
+class _LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+
+def idle_seconds() -> float:
+    """Seconds since the last mouse / keyboard input anywhere in this session."""
+    li = _LASTINPUTINFO(ctypes.sizeof(_LASTINPUTINFO), 0)
+    if not user32.GetLastInputInfo(ctypes.byref(li)):
+        return 0.0
+    now = ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
+    return ((now - li.dwTime) & 0xFFFFFFFF) / 1000.0

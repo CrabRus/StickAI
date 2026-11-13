@@ -197,7 +197,10 @@ def paint_rod(p: QPainter, s: Stickman) -> None:
     d = normalize(s.hook - grip)
     if d.length() < 0.5:
         d = Vec(s.facing, -0.6)
-    tip = grip + d * (ROD_LEN * h)
+    reach = ROD_LEN * h
+    if s.hook_taut:  # hanging right under the hook (a button): the rod mustn't poke past it
+        reach = min(reach, max(0.12 * h, (s.hook - grip).length() - 0.03 * h))
+    tip = grip + d * reach
     butt = grip - d * (0.10 * h)
     rod = QPainterPath()
     rod.moveTo(butt.x, butt.y)

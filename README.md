@@ -218,6 +218,8 @@ stickai/
     music.py               music boxes + your song, output device choice
     fight.py               fights: charge, punch, kick, flying kick, block, knock back, run away
     couch.py               couch time while you watch videos
+    cards.py               a card game at a table while you're away
+    spellwatch.py          spelling watch: point at a typo in the field you type in (opt-in)
 
   ui/                      WINDOWS YOU SEE
     chatwindow.py          chat: history, colours, pictures, ⚙ / ⏻ buttons
@@ -338,7 +340,7 @@ Screenshots go to Google Gemini and are **not** saved on disk. Every look is log
 Settings → General → **Let them close / open windows and type for you**. It's off by default. When on:
 - **Window list:** they get the list of your open and minimized windows (titles, sent to Google) and the text fields found in them.
 - **What they can do:** if you *ask in a chat message*, the character who answers can take one task:
-  - close or minimize a window: they leap onto it, your cursor glides to its ✕ / _ button, they stomp, and it closes or minimizes. Closing is the same as pressing ✕, so apps still ask to save.
+  - close or minimize a window: they cast the fishing rod at its ✕ / _ button, fly up on the line, hang under it and jab it, and it closes or minimizes (then they drop off). Closing is the same as pressing ✕, so apps still ask to save. Closing a browser tab works the same way, on the tab's own ✕.
   - open (restore) a window;
   - type text into a field: they hop onto the field, the cursor glides in, clicks, and the text is typed while they hammer on it.
 - **You always decide:** an **Allow / Deny** dialog shows exactly what will happen; Allow is the highlighted default (Enter); Esc denies.
@@ -399,7 +401,7 @@ All of these come only from replies to *your* message, one at a time, and show u
 | "scroll down", "scroll down and tell me what's there" | scrolls the page; with *Seeing your screen* on, looks again and summarises what's visible | same | unless *without asking* |
 | "Chrome on the left, VS Code on the right" | snaps windows to halves, quarters, thirds, centre or full screen, on any monitor | same | unless *without asking* |
 | "open Spotify", "open Calculator" | if it's already open (even minimized) brings it back; otherwise starts it **from your Start menu** by name, desktop programs and Store apps alike (*…open apps from my Start menu*, on by default). *Apps they may open* adds your own programs or files on top | *Let them close / open windows…* | unless *without asking* |
-| "check the spelling in that field" | reads that one field, checks it **on this PC** with the Windows spell checker (the text never goes to Google), shows the fixes and asks before replacing the text. Password fields are never read | *…check spelling in their text fields* | always, with the list of fixes |
+| "check the spelling in that field" | reads that one field, checks it **on this PC** with the Windows spell checker (the text never goes to Google). Then he goes to each typo, stands on the line right next to it jabbing at it, and offers the fix in a bubble: **click the bubble** to fix that word, or ignore it (after two ignored ones he stops). Password fields are never read | *…check spelling in their text fields* | each fix, by clicking its bubble |
 | "translate / fix / shorten what I copied" | your clipboard text is sent with *that* message only (and logged: 📋), the result goes back onto the clipboard | *Read and replace what I copied* (off by default) | no |
 | "remind me in 20 minutes to stretch", "at 15:30…", "cancel the reminders" | a local timer: no more Gemini requests. When it's due, that character drops in with a full bubble and a Windows notification. Saved in `memory/reminders.json`, so it survives a restart (a missed one fires on start, marked as missed) | *Timers and reminders* (on by default) | no |
 
@@ -528,6 +530,22 @@ When you watch something, everybody on the desktop gathers on a sofa, drawn from
 - **Ending:** 6 s after you stop watching, they get up and the sofa fades away.
 - **Local only:** detection runs on your PC and nothing is sent anywhere.
 - **Toggle:** Settings → General → *Sit on a couch together when I watch videos*.
+
+## Cards while you're away
+
+When nobody touches the mouse or keyboard for a while (2 minutes by default) and you're not watching a video, everybody sits down at a little card table at the bottom of the screen ([activities/cards.py](stickai/activities/cards.py)).
+- **The table:** a stool on each side, more players behind the table (it hides their legs). Each holds a fan of cards, they play one in turn onto the green felt, and whoever takes the round throws his arms up.
+- **Ending:** the moment you move the mouse or press a key they put the cards away and get up.
+- **From the chat:** "play cards" starts a game right away; it lasts until you say **stop**.
+- **Local only:** an animation; nothing is sent anywhere.
+- **Settings:** Behaviour → *Play cards at a table when I'm away* and *…after N min*.
+
+## Spelling watch (opt-in)
+
+Settings → Control of the PC → *…and while I type in a field: point at a typo* (needs *…check spelling in their text fields*). While you type in another app's text field and pause, the nearest free stickman goes over to the first misspelled word you've finished, stands next to it jabbing at it and offers the fix in a bubble. Click the bubble to fix it; otherwise nothing changes, and the same word isn't offered again.
+- The field you're typing in is read about once a second, locally, and checked by the Windows spell checker on this PC. Nothing is sent anywhere. Password fields and read-only fields are skipped, and so are StickAI's own windows.
+- Where the word is on screen comes from the field itself: its Text pattern (browsers, Word, the new Notepad), or for classic Windows text boxes the box's own character positions. Otherwise he points at the field.
+- At most one offer every 25 s.
 
 ## Their own folder (opt-in)
 

@@ -138,6 +138,7 @@ class OverlayWindow(QWidget):
                     render.paint_stickman_debug(p, s)
         self.app.fight.paint(p)  # hit sparks and kick swooshes over the fighters
         self.app.couch.paint(p)  # in front of them: only heads peek over the back
+        self.app.cards.paint(p)  # the table in front of those sitting behind it, cards in their hands
         p.restore()
 
         if self.app.debug and self.app.hud_overlay is self:

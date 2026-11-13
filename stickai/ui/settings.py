@@ -334,6 +334,15 @@ class SettingsDialog(QDialog):
         self._opt(form, self.web, indent=True)
         self.widgets.toggled.connect(self.web.setEnabled)
         self._opt(form, self.couch)
+        self.cards = QCheckBox(tr("set.cards"))
+        self._opt(form, self.cards)
+        self.cards_after = QDoubleSpinBox()
+        self.cards_after.setRange(0.5, 60.0)
+        self.cards_after.setSingleStep(0.5)
+        self.cards_after.setDecimals(1)
+        self.cards_after.setSuffix(tr("set.minutes"))
+        self.cards.toggled.connect(self.cards_after.setEnabled)
+        form.addRow(tr("set.cards_after"), self.cards_after)
         sec = QLabel(tr("set.freq_section"))
         sec.setObjectName("Section")
         form.addRow(sec)
@@ -413,9 +422,14 @@ class SettingsDialog(QDialog):
         self.read_fields = QCheckBox(tr("set.read_fields"))
         self.read_pages = QCheckBox(tr("set.read_pages"))
         self._opt(form, self.control)
-        for cb in (self.trust, self.start_apps, self.read_fields, self.read_pages):
+        self.spell_watch = QCheckBox(tr("set.spell_watch"))
+        for cb in (self.trust, self.start_apps, self.read_fields, self.spell_watch, self.read_pages):
             self._opt(form, cb, indent=True)
             self.control.toggled.connect(cb.setEnabled)
+        watch_ok = lambda *_a: self.spell_watch.setEnabled(  # noqa: E731
+            self.control.isChecked() and self.read_fields.isChecked())
+        self.control.toggled.connect(watch_ok)
+        self.read_fields.toggled.connect(watch_ok)
         self.reminders = QCheckBox(tr("set.reminders"))
         self._opt(form, self.reminders)
         self.apps = QPlainTextEdit()
@@ -475,11 +489,11 @@ class SettingsDialog(QDialog):
         self.music_out.activated.connect(self._dirty)
         for w in (self.banter, self.react, self.greet, self.widgets, self.web, self.control, self.trust, self.files,
                   self.trust_files, self.on_top, self.spellcheck, self.titles, self.read_fields, self.start_apps,
-                  self.read_pages, self.clipboard, self.reminders, self.couch, self.vscode, self.code_watch,
+                  self.read_pages, self.clipboard, self.reminders, self.couch, self.cards, self.spell_watch, self.vscode, self.code_watch,
                   self.save_hints, self.notify, self.notify_sound, self.quiet_coding):
             w.toggled.connect(self._dirty)
         for w in (self.b_lo, self.b_hi, self.music_bpm, self.max_replies, self.history_lines, self.summarize_every,
-                  self.memory_facts):
+                  self.memory_facts, self.cards_after):
             w.valueChanged.connect(self._dirty)
         for w in (self.bubble_time, self.temperature):
             w.box.valueChanged.connect(self._dirty)
@@ -692,6 +706,11 @@ class SettingsDialog(QDialog):
         self.music_bpm.setValue(s.music_bpm)
         self._fill_outputs(s.music_output)
         self.couch.setChecked(s.couch)
+        self.cards.setChecked(s.cards)
+        self.cards_after.setValue(s.cards_after)
+        self.cards_after.setEnabled(s.cards)
+        self.spell_watch.setChecked(s.spell_watch)
+        self.spell_watch.setEnabled(s.control and s.read_fields)
         self.vscode.setChecked(s.vscode)
         self.code_watch.setChecked(s.code_watch)
         self.code_watch.setEnabled(s.vscode)
@@ -898,7 +917,7 @@ class SettingsDialog(QDialog):
             vision=self.vision.currentData(), control=self.control.isChecked(), trust_windows=self.trust.isChecked(),
             files=self.files.isChecked(), trust_files=self.trust_files.isChecked(),
             files_folder=self.files_folder.text().strip(),
-            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), vscode=self.vscode.isChecked(), code_watch=self.code_watch.isChecked(), save_hints=self.save_hints.isChecked(), share_window_titles=self.titles.isChecked(),
+            music_file=self.music_file.text().strip(), music_bpm=self.music_bpm.value(), music_output=self.music_out.currentData() or "", couch=self.couch.isChecked(), cards=self.cards.isChecked(), cards_after=round(self.cards_after.value(), 1), spell_watch=self.spell_watch.isChecked(), vscode=self.vscode.isChecked(), code_watch=self.code_watch.isChecked(), save_hints=self.save_hints.isChecked(), share_window_titles=self.titles.isChecked(),
             hotkey=hotkey, hide_hotkey=hide_hotkey, models=models,
             temperature=round(self.temperature.value(), 2), max_replies=self.max_replies.value(),
             activity=tuple((k, round(w.value(), 2)) for k, w in self.freq.items()),

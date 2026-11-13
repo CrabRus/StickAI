@@ -180,9 +180,13 @@ class DesktopScene:
         self.platforms, self.walls = build_geometry(self.windows, self.monitors, self.headroom, self.widgets)
         self.platforms += getattr(self, "extra", [])
 
-    def set_extra(self, platforms: list) -> None:
-        """App-made surfaces that aren't windows (e.g. the couch seat; negative hwnd)."""
-        self.extra = list(platforms)
+    def set_extra(self, platforms: list, owner: str = "couch") -> None:
+        """App-made surfaces that aren't windows (the couch seat, the card table...; negative
+        hwnd). Each owner keeps its own list, so one activity doesn't wipe another's."""
+        lists = getattr(self, "_extras", {})
+        lists[owner] = list(platforms)
+        self._extras = lists
+        self.extra = [p for ps in lists.values() for p in ps]
         self._rebuild()
 
     def window(self, hwnd: int) -> WindowInfo | None:

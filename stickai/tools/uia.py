@@ -3,8 +3,10 @@
 * find_clickables(hwnd, name): buttons / links / tabs / menu items whose
   accessible name matches, best match first ("press Save", "click Next").
 * read_field(x, y) / write_field(x, y, text): the text field at a screen point,
-  through its Value pattern. Used only by "check the spelling in that field",
-  which is a separate opt-in setting. Password fields are never read.
+  through its Value pattern; word_spots(x, y, words): where words of it are on screen.
+  Used only by "check the spelling in that field", which is a separate opt-in setting.
+* focused_field(): the field you're typing in, for the spelling watch (another opt-in).
+Password fields are never read.
 """
 from __future__ import annotations
 
@@ -160,3 +162,118 @@ def write_field(x: int, y: int, text: str) -> bool:
     except Exception as e:
         log.info("write_field failed: %s", e)
         return False
+
+
+def word_spots(x: int, y: int, words: list[str]) -> dict[str, tuple[int, int, int, int]]:
+    """{word: (left, top, right, bottom)} on screen of the first visible occurrence of each word
+    in the text field at (x, y), through its Text pattern. Words it can't place are left out
+    (fields without a Text pattern give {})."""
+    out: dict[str, tuple[int, int, int, int]] = {}
+    try:
+        UIA, _auto_ = _auto()
+        el, _pat = _value_element(x, y)
+        if el is None or el.CurrentIsPassword:
+            return out
+        if not el.GetCurrentPropertyValue(UIA.UIA_IsTextPatternAvailablePropertyId):
+            return _edit_spots(el, str(_pat.CurrentValue or ""), words) if _pat is not None else out
+        tp = el.GetCurrentPattern(UIA.UIA_TextPatternId).QueryInterface(UIA.IUIAutomationTextPattern)
+        doc = tp.DocumentRange
+        fr = el.CurrentBoundingRectangle
+        for w in words:
+            rng = doc.FindText(w, False, False)
+            while rng is not None:
+                rects = list(rng.GetBoundingRectangles() or ())
+                if len(rects) >= 4:  # left, top, width, height (of the first line it covers)
+                    l, t, wd, ht = (int(v) for v in rects[:4])
+                    if wd > 0 and fr.left - 2 <= l and l + wd <= fr.right + 2 and fr.top - 2 <= t and t + ht <= fr.bottom + 2:
+                        out[w] = (l, t, l + wd, t + ht)
+                        break
+                # not visible (scrolled away): try the next occurrence
+                rest = doc.Clone()
+                rest.MoveEndpointByRange(UIA.TextPatternRangeEndpoint_Start, rng, UIA.TextPatternRangeEndpoint_End)
+                rng = rest.FindText(w, False, False)
+    except Exception as e:
+        log.info("word_spots failed: %s", e)
+    return out
+
+
+def _edit_spots(el, text: str, words: list[str]) -> dict[str, tuple[int, int, int, int]]:
+    """A classic Windows text box (no Text pattern): ask the box itself where a character is
+    (EM_POSFROMCHAR). Its coordinates may be scaled for an old, non-DPI-aware app, so they're
+    mapped through the ratio of its on-screen size to its client size."""
+    import ctypes
+    import re
+    from ctypes import wintypes
+    out: dict[str, tuple[int, int, int, int]] = {}
+    hwnd = el.CurrentNativeWindowHandle
+    cls = (el.CurrentClassName or "").lower()
+    if not hwnd or "edit" not in cls or "rich" in cls:  # RichEdit wants a pointer in another process
+        return out
+    u32 = ctypes.windll.user32
+    send = u32.SendMessageW
+    send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    send.restype = ctypes.c_ssize_t
+    br = el.CurrentBoundingRectangle
+    k = 1.0  # a non-DPI-aware app answers in its own 96-dpi units: scale them to the screen's
+    try:
+        win_dpi = u32.GetDpiForWindow(wintypes.HWND(hwnd))
+        mon_dpi = ctypes.c_uint(96)
+        ctypes.windll.shcore.GetDpiForMonitor(u32.MonitorFromWindow(wintypes.HWND(hwnd), 2), 0,
+                                              ctypes.byref(mon_dpi), ctypes.byref(ctypes.c_uint()))
+        if win_dpi and mon_dpi.value:
+            k = mon_dpi.value / win_dpi
+    except (OSError, AttributeError):
+        pass
+    org = wintypes.POINT(0, 0)  # where the client area starts on screen
+    u32.ClientToScreen(wintypes.HWND(hwnd), ctypes.byref(org))
+    ox, oy = (org.x, org.y) if br.left - 4 <= org.x <= br.left + 8 else (br.left + 2, br.top + 2)
+
+    def pos(i):
+        v = send(hwnd, 0x00D6, i, 0)  # EM_POSFROMCHAR
+        if v == -1:
+            return None
+        x, y = v & 0xFFFF, (v >> 16) & 0xFFFF
+        return (x - 0x10000 if x >= 0x8000 else x), (y - 0x10000 if y >= 0x8000 else y)
+    for w in words:
+        m = re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)
+        if not m:
+            continue
+        a = pos(m.start())
+        if a is None:
+            continue
+        b = pos(m.end()) or pos(m.end() - 1)
+        x2 = b[0] if b and b[1] == a[1] and b[0] > a[0] else a[0] + 9 * len(w)
+        line = send(hwnd, 0x00C9, m.start(), 0)        # EM_LINEFROMCHAR
+        nxt = send(hwnd, 0x00BB, line + 1, 0)          # EM_LINEINDEX of the next line
+        lh = (pos(nxt) or (0, a[1]))[1] - a[1] if nxt > 0 else 0
+        if lh <= 0:
+            lh = max(14, int(1.9 * (x2 - a[0]) / max(1, len(w))))
+        l, t = ox + a[0] * k, oy + a[1] * k
+        spot = (int(l), int(t), int(ox + x2 * k), int(t + lh * k))
+        if br.top <= spot[1] and spot[3] <= br.bottom + 2 and br.left <= spot[0] < br.right:
+            out[w] = spot
+    return out
+
+
+def focused_field() -> dict | None:
+    """The text field you're typing in (another app's), read for the spelling watch:
+    {text, rect (l, t, r, b), pid}. None for password / read-only fields or non-text controls."""
+    try:
+        UIA, auto = _auto()
+        el = auto.GetFocusedElement()
+        if el is None or el.CurrentIsPassword:
+            return None
+        if el.CurrentControlType not in (UIA.UIA_EditControlTypeId, UIA.UIA_DocumentControlTypeId):
+            return None
+        if not el.GetCurrentPropertyValue(UIA.UIA_IsValuePatternAvailablePropertyId):
+            return None
+        pat = el.GetCurrentPattern(UIA.UIA_ValuePatternId).QueryInterface(UIA.IUIAutomationValuePattern)
+        if pat.CurrentIsReadOnly:
+            return None
+        r = el.CurrentBoundingRectangle
+        if r.right <= r.left or r.bottom <= r.top:
+            return None
+        return {"text": str(pat.CurrentValue or "")[:5000], "rect": (r.left, r.top, r.right, r.bottom),
+                "pid": int(el.CurrentProcessId)}
+    except Exception:
+        return None

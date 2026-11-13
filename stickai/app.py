@@ -41,7 +41,9 @@ from .ui.dialogs import confirm
 from .i18n import set_language, tr
 from .world import World
 from .activities.music import MusicShow
+from .activities.cards import CARDS, Cards
 from .activities.couch import COUCH, Couch
+from .activities.spellwatch import SpellWatch
 from .activities.fight import Fight
 from .desktop.widgets import WidgetScanner
 
@@ -128,9 +130,11 @@ class StickApp:
         self.start_apps = StartApps()  # the Start menu's apps, read in the background
         self.music = MusicShow(self)
         self.couch = Couch(self)
+        self.cards = Cards(self)
         self.fight = Fight(self)
         self.chat = ChatWindow(self)
         self.chat.apply_on_top(self.roster.settings.chat_on_top)
+        self.spell_watch = SpellWatch(self)  # opt-in: point at typos in the field you type in
         self._apply_spellcheck()
         bubble_mod.TIME_FACTOR = self.roster.settings.bubble_time
         for e in self.memory.entries[-80:]:  # older history stays on disk
@@ -248,10 +252,11 @@ class StickApp:
         gone = self.world.step(dt)
         dirty = [before.pop(id(s)).union(s.bbox()) for s in self.world.stickmen if id(s) in before]
         dirty += before.values()  # stickmen that left: erase where they were
-        cb = self.couch.bbox()
-        self.couch.update()
-        if cb is not None:
-            dirty.append(cb)
+        for act in (self.couch, self.cards):
+            cb = act.bbox()
+            act.update()
+            if cb is not None:
+                dirty.append(cb)
         mb = self.music.bbox()
         self.music.update()
         if mb is not None:
@@ -339,6 +344,7 @@ class StickApp:
         if changed and getattr(self.scene, 'extra', None):
             self.scene._rebuild()  # keep app-made surfaces (couch) after a window change
         self.couch.poll()
+        self.cards.poll()
         # tell the widget scanner which windows to look into (topmost first)
         self.widget_scanner.set_targets(
             [(w.hwnd, (w.rect.left, w.rect.top, w.rect.right, w.rect.bottom), w.class_name) for w in self.scene.windows
@@ -495,6 +501,8 @@ class StickApp:
                  "button": "a button"}.get(getattr(s.support, "kind", ""), "a search bar / text field")
         if s.support is not None and s.support.hwnd == COUCH:
             return "sitting on the couch, watching a video together with the user"
+        if s.support is not None and s.support.hwnd == CARDS:
+            return "sitting at a little table playing cards with the others (the user stepped away)"
         if st == "HOP":
             return "jumping onto something inside a window"
         if st == "SITTING" and s.support is not None and s.support.widget:
@@ -515,9 +523,10 @@ class StickApp:
         return "on the desktop"
 
     def say(self, key: str, text: str, action: str = "none", to: str = "user", force_bubble: bool = False,
-            on_click=None) -> None:
+            on_click=None, hold: float | None = None) -> None:
         """Show a line above a character. force_bubble: a full bubble whatever the bubble
-        setting (reminders and tool results you need to read right there)."""
+        setting (reminders and tool results you need to read right there). hold: keep it up
+        that many seconds (e.g. an offer you can click)."""
         s = self.world.get(key)
         if s is None:
             return
@@ -529,9 +538,11 @@ class StickApp:
             b.on_click = on_click
             if mode == "full":
                 b.say(text)
+                if hold:
+                    b.expires = time.monotonic() + hold
             else:  # just a sign that they said something: ? for questions, ! otherwise
                 b.indicate("?" if text.rstrip().endswith("?") else "!")
-        s.talk(reading_time(text) + 0.3)  # stands still as long as the bubble is up
+        s.talk((hold or reading_time(text)) + 0.3)  # stands still as long as the bubble is up
         other = self.world.get(to)
         if other is not None and other is not s:
             s.face_toward(other.pos.x)   # look at who you're talking to...
@@ -558,6 +569,8 @@ class StickApp:
             self.couch.remove()
         elif action == "watch":
             self.couch.start(manual=True)
+        elif action == "cards":
+            self.cards.start(manual=True)
         elif action == "fight":
             pair = [key, to] if to in self.roster.characters and to != key else None
             if pair:
@@ -624,6 +637,8 @@ class StickApp:
         names = [n for c in self.roster.characters.values() for n in (c.key, c.display_name, *c.aliases)]
         names += [w for phrase in names + list(self.roster.settings.group_words) for w in phrase.split()]
         self.chat.input.set_spellcheck(self.roster.settings.spellcheck, names)
+        if hasattr(self, "spell_watch"):
+            self.spell_watch.update_enabled()
 
     def apply_roster(self, roster: Roster) -> None:
         """Make the running app match a (new) roster: language, looks, timers..."""
@@ -1000,7 +1015,7 @@ def _already_running() -> bool:
 def main(argv: list[str] | None = None) -> int:
     _setup_logging()
     args = parse_args(argv)
-    if args.exit_after is None and _already_running():
+    if not args.exit_after and _already_running():  # test runs (--exit-after) may run beside it
         try:
             set_language(load_roster(Path(args.characters)).settings.language)
         except Exception:  # noqa: BLE001 - English is fine for this one message

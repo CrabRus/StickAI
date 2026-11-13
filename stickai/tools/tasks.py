@@ -80,6 +80,8 @@ MAX_CLIPBOARD = 20000
 MAX_TYPOS_SHOWN = 12
 MAX_TEXT = 300
 GAME_MAX_SECONDS = 300
+SPELL = -9           # pseudo window handle of the spot a stickman stands on above a typo
+OFFER_SECONDS = 12.0  # how long "click me to fix it" stays up
 
 
 class TaskFailed(Exception):
@@ -626,6 +628,109 @@ class TaskRunner(QObject):
                 self.app.chat.show()
 
     # ------------------------------------------------------------- scripts
+    def _fly_to_button(self, s, x: float, y: float):
+        """Cast the fishing rod at a button (a window's X, a tab's X), reel up and hang under it,
+        jabbing at it with the free hand. The caller presses it for real, then calls s.let_go()."""
+        if not any(m.bounds.contains(x, y) for m in self.app.scene.monitors):
+            return  # off-screen (a minimized window): press it without the show
+        if self._aside(x, y):
+            yield ("wait", 0.15)
+        s.talk(0.3)
+        if not s.rod_to_button(x, y):  # being dragged / climbing: just wave at it
+            s.wave(1.0)
+            yield ("wait", 0.5)
+            return
+        yield ("until", lambda: s.rod_arrived or s.state != State.GRAPPLE, 6.0)
+        s.poke(0.7)
+        yield ("wait", 0.45)
+
+    # ---- spelling: pointing at a typo
+    def _typo(self, s, key: str, fx: float, fy: float, bad: str, good: str, fallback, left: int = 0):
+        """Stand over one typo in the field at (fx, fy), jab at it and offer the fix in a bubble
+        (a click on it = fix). True fixed, False not wanted, None the field didn't take it."""
+        box = self._background(lambda: uia.word_spots(fx, fy, [bad]))
+        yield ("until", lambda: box.get("done", False), 4.0)
+        spot = (box.get("value") or {}).get(bad) or fallback
+        yield from self._stand_by_typo(s, spot)
+        text = tr("spell.offer", bad=bad, good=good) + (" " + tr("spell.more", n=left) if left else "")
+        ok = yield from self._offer(key, text, OFFER_SECONDS)
+        if not ok:
+            return False
+
+        def fix():
+            from ..ui.spellcheck import WORD
+            now, _problem = uia.read_field(fx, fy)
+            if not now:
+                return False
+            new = WORD.sub(lambda m: good if m.group() == bad else m.group(), now)
+            if new == now:
+                return bad not in now  # already fixed by you meanwhile: fine; not readable: failed
+            return uia.write_field(fx, fy, new)
+        box = self._background(fix)
+        s.gesture, s.gesture_until = "type", s.time + 1.0
+        yield ("until", lambda: box.get("done", False), 4.0)
+        s.gesture = ""
+        if not box.get("value"):
+            return None
+        s.jump()
+        yield ("wait", 0.5)
+        return True
+
+    def _stand_by_typo(self, s, spot):
+        """Hop onto the line of text, just left of the word (right of it at the screen's edge)."""
+        from ..desktop.scene import Platform
+        l, t, r, b = spot
+        h = s.h
+        plat = Platform(int(t), int(l - 0.7 * h), int(r + 0.7 * h), SPELL)
+        self.app.scene.set_extra([plat], owner="spell")
+        x = l - 0.16 * h
+        if not any(m.work.contains(x, t - 2) for m in self.app.scene.monitors):
+            x = r + 0.16 * h
+        if s.state == State.GRAPPLE:
+            s.let_go()
+        if s.leap_to(plat, x):
+            yield ("until", lambda: s.state not in (State.JUMP_PREP, State.HOP), 6.0)
+        s.point_at = ((l + r) / 2, (t + b) / 2)
+        s.gesture, s.gesture_until = "poke", s.time + 3600.0
+
+    def _leave_typo(self, s) -> None:
+        if s is not None and s.gesture in ("poke", "type"):
+            s.gesture = ""
+        self.app.scene.set_extra([], owner="spell")  # the spot goes: he drops onto what's below
+
+    def _offer(self, key: str, text: str, seconds: float):
+        """A bubble that does something when clicked; True if it was clicked in time."""
+        self._answer = None
+
+        def clicked() -> None:
+            self._answer = True
+        self.app.say(key, text, force_bubble=True, on_click=clicked, hold=seconds)
+        yield ("until", lambda: self._answer is not None, seconds)
+        ok = bool(self._answer)
+        self._answer = False
+        return ok
+
+    def offer_typo(self, key: str, field: dict, bad: str, good: str) -> bool:
+        """The spelling watch saw a typo in the field you're typing in: the one with `key` goes
+        over and offers the fix (nothing is changed unless you click the bubble)."""
+        if self.busy or self.app.world.get(key) is None:
+            return False
+        self.busy = True
+        self._gen = self._typo_side(key, field, bad, good)
+        self._step()
+        return True
+
+    def _typo_side(self, key: str, field: dict, bad: str, good: str):
+        s = self.app.world.get(key)
+        l, t, r, b = field["rect"]
+        cx, cy = (l + r) / 2, (t + min(b, t + 40)) / 2  # near the top: one-line fields and editors alike
+        try:
+            ok = yield from self._typo(s, key, cx, cy, bad, good, (l, t, r, min(b, t + 30)))
+            if ok is None:
+                self.app.say(key, tr("spell.why_write"), force_bubble=True)
+        finally:
+            self._leave_typo(s)
+
     def _script(self, key: str, spec: dict):
         app, name, what = self.app, self.app.director.name(key), spec["what"]
         s = app.world.get(key)
@@ -662,15 +767,13 @@ class TaskRunner(QObject):
                 if rect is None:
                     raise TaskFailed(tr("task.why_gone"))
                 bx, by = control.caption_buttons(hwnd, rect)["close" if kind == "close_window" else "minimize"]
-                top = app.scene.platform_under(bx, rect.top, hwnd, window_tolerance=3)
-                if top is not None and not top.widget and s.leap_to(top, min(max(bx, top.x0 + 4), top.x1 - 4)):
-                    yield ("until", lambda: s.state not in (State.JUMP_PREP, State.HOP), 6.0)
-                yield ("glide", bx, by, 0.6)
-                s.jump()  # the stomp on the button
-                yield ("wait", 0.4)
+                yield from self._fly_to_button(s, bx, by)
                 if not control.exists(hwnd):
+                    s.let_go()
                     raise TaskFailed(tr("task.why_gone"))
                 (control.close_window if kind == "close_window" else control.minimize_window)(hwnd)
+                yield ("wait", 0.25)
+                s.let_go()  # the button is gone (or the window went down): drop off
 
             elif kind in FILE_KINDS:
                 ws = Workspace(app.roster.settings.files_folder)
@@ -871,25 +974,25 @@ class TaskRunner(QObject):
                     app.say(key, tr("spell.clean"), "jump", force_bubble=True)
                     what = tr("task.spell", field=spec["field"])
                 else:
-                    shown = "\n".join(f"{a}  →  {b}" for a, b in list(fixes.items())[:MAX_TYPOS_SHOWN])
-                    if len(fixes) > MAX_TYPOS_SHOWN:
-                        shown += "\n…"
-                    yield ("ask", tr("perm.title"),
-                           f"{name} " + tr("spell.found", n=len(fixes), field=spec["field"], list=shown),
-                           tr("spell.fix"))
-                    if not self._answer:
-                        self._result = ("denied", "the user said no")
-                        app.director.note_event(tr("task.denied", name=name, what=what))
-                        return
-                    fixed = WORD.sub(lambda m: fixes.get(m.group(), m.group()), text)
-                    s.gesture, s.gesture_until = "type", s.time + 1.2
-                    box = self._background(lambda: uia.write_field(fx, fy, fixed))
-                    yield ("until", lambda: box.get("done", False), 4.0)
-                    s.gesture = ""
-                    if not box.get("value"):
-                        raise TaskFailed(tr("spell.why_write"))
-                    s.jump()
-                    what = tr("spell.fixed", n=len(fixes), field=spec["field"])
+                    # go to each typo, stand over it jabbing at it, and offer the fix in a bubble
+                    field_spot = (rect.left + dx, rect.top + dy, rect.left + dx + w, rect.top + dy + h)
+                    words = list(fixes)[:MAX_TYPOS_SHOWN]
+                    fixed_n, ignored = 0, 0
+                    try:
+                        for i, bad in enumerate(words):
+                            ok = yield from self._typo(s, key, fx, fy, bad, fixes[bad], field_spot,
+                                                       left=len(words) - i - 1)
+                            if ok is None:
+                                raise TaskFailed(tr("spell.why_write"))
+                            if ok:
+                                fixed_n, ignored = fixed_n + 1, 0
+                            else:
+                                ignored += 1
+                                if ignored >= 2:  # you're not interested: stop the tour
+                                    break
+                    finally:
+                        self._leave_typo(s)
+                    what = tr("spell.fixed", n=fixed_n, field=spec["field"]) if fixed_n else                         tr("spell.left", n=len(fixes), field=spec["field"])
 
             elif kind == "type_text" and spec["rel"] is None:  # whatever has focus in that window
                 control.restore_window(hwnd)
@@ -943,6 +1046,8 @@ class TaskRunner(QObject):
         except TaskFailed as e:
             if s is not None:
                 s.gesture = ""
+                if s.grapple_mode == "button":
+                    s.let_go()  # still hanging under a button
             self._result = ("failed", str(e))
             app.director.note_event(tr("task.failed", name=name, what=what, why=str(e)))
 

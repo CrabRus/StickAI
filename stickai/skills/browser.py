@@ -198,6 +198,25 @@ def select_tab(tab: dict) -> bool:
         return False
 
 
+def close_button_spot(tab: dict) -> tuple[int, int] | None:
+    """Screen point of the tab's ✕ (or, when it has none showing, of the tab itself)."""
+    UIA, auto = _uia()
+    e = tab["element"]
+    try:
+        btns = e.FindAll(UIA.TreeScope_Descendants, auto.CreatePropertyCondition(
+            UIA.UIA_ControlTypePropertyId, UIA.UIA_ButtonControlTypeId))
+        for i in range(btns.Length):
+            r = btns.GetElement(i).CurrentBoundingRectangle
+            if r.right > r.left and r.bottom > r.top:
+                return (r.left + r.right) // 2, (r.top + r.bottom) // 2
+        r = e.CurrentBoundingRectangle
+        if r.right > r.left:
+            return (r.left + r.right) // 2, (r.top + r.bottom) // 2
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def close_tab(tab: dict) -> bool:
     """Press the tab's own ✕ button (works without focusing the window)."""
     UIA, auto = _uia()
@@ -622,6 +641,14 @@ class BrowserSkill(Skill):
             s.jump()
             return
         op = spec["op"]
+        if op == "close":  # fly over to the tab's ✕ on the fishing rod first
+            def spot():
+                hits = _match_tabs(tabs(hwnd), spec["match"])
+                return close_button_spot(hits[0]) if hits else None
+            box = background(spot)
+            yield ("until", lambda: box.get("done", False), 8.0)
+            if box.get("value"):
+                yield from runner._fly_to_button(s, *box["value"])
 
         def work():
             all_tabs = tabs(hwnd)
@@ -644,6 +671,8 @@ class BrowserSkill(Skill):
             spec["followup"] = True
             spec["done"] = tr("br.tabs_listed", n=len(names))
             return
+        if op == "close" and s.grapple_mode == "button":
+            s.let_go()
         if value == "select":  # close the now-selected tab with Ctrl+W (needs the window in front)
             control.restore_window(hwnd)
             yield ("wait", 0.4)

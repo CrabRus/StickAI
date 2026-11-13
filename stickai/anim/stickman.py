@@ -147,6 +147,11 @@ class Stickman:
         self.reel_time = 0.5
         self.hang_until = 0.0
         self.rod_cooldown = 0.0
+        self.poke_until = 0.0      # hanging under a button: the free hand jabs at it
+        # card game (activities/cards.py): seated with a hand of cards
+        self.cards = False
+        self.card_play_until = 0.0  # reaching out to put a card on the table
+        self.cheer_until = 0.0      # won the round: both arms up
 
         self.pos = Vec(x, y)
         self.vel = Vec()
@@ -337,12 +342,15 @@ class Stickman:
         self.sit_until = self.time + seconds
         self.set_state(State.SITTING)
 
-    def grapple_to(self, anchor: Vec, plat: Platform | None) -> bool:
+    def grapple_to(self, anchor: Vec, plat: Platform | None, mode: str = "") -> bool:
         """Cast the rod at `anchor`: onto platform `plat` (pulled up onto it), or, with no
-        platform, hang from that point (the top of the screen) for a moment."""
+        platform, hang from that point (the top of the screen) for a moment. mode "button":
+        fly up to a button (a window's X) and hang there until let_go()."""
         if self.state in (State.DRAGGED, State.GRAPPLE) or self.state in CLIMB_STATES or self.leaving:
             return False
-        self.grapple_mode = "climb" if plat is not None else "hang"
+        self.grapple_mode = mode or ("climb" if plat is not None else "hang")
+        self.hang_until = 0.0
+        self.cards = False
         self.grapple_plat = plat
         self.anchor_pt = anchor.copy()
         self.facing = 1 if anchor.x >= self.pos.x else -1
@@ -388,6 +396,28 @@ class Stickman:
     def drop_rod(self) -> None:
         self.rod_on = False
         self.hook_taut = False
+
+    def rod_to_button(self, x: float, y: float) -> bool:
+        """Fly on the fishing rod up to a button (e.g. a window's X) and hang under it."""
+        if self.state == State.GRAPPLE:
+            self.drop_rod()
+            self.set_state(State.FALLING)
+        return self.grapple_to(Vec(x, y), None, mode="button")
+
+    @property
+    def rod_arrived(self) -> bool:
+        """Hanging under the hook (the reel-in is over)."""
+        return (self.state == State.GRAPPLE and self.hook_taut
+                and self.time - getattr(self, "_reel_t0", self.time) >= self.reel_time)
+
+    def poke(self, seconds: float = 0.6) -> None:
+        self.poke_until = self.time + seconds
+
+    def let_go(self) -> None:
+        """Drop off the rod (after pressing the button)."""
+        if self.state == State.GRAPPLE:
+            self.drop_rod()
+            self.start_fall(Vec(-self.facing * 0.5 * self.h, 0.0))
 
     def fight_do(self, move: str, seconds: float) -> None:
         """Start one fighting move (the pose follows the move's progress)."""
@@ -868,6 +898,14 @@ class Stickman:
             self.land(p)
             self.attach_rect = rect
             return
+        if self.grapple_mode == "button":  # under a button: hold on until told to let go
+            if not self.hang_until:
+                self.hang_until = self.time + 20.0  # (safety: never hang there forever)
+            sway = 0.05 * h * math.sin(self.time * 2.5)
+            self.pos = Vec(end.x + sway, end.y)
+            if self.time > self.hang_until:
+                self.let_go()
+            return
         # hanging from the top of the screen: sway a little, then let go
         if not self.hang_until:
             self.hang_until = self.time + random.uniform(1.5, 3.5)
@@ -883,6 +921,8 @@ class Stickman:
         h, a = self.h, self.anchor_pt
         if self.grapple_mode == "climb":
             return Vec(a.x - self.facing * 0.10 * h, a.y + 0.30 * h)
+        if self.grapple_mode == "button":  # a bit to the side, so the free hand reaches the button
+            return Vec(a.x - self.facing * 0.16 * h, a.y + 1.02 * h)
         return Vec(a.x, a.y + 1.15 * h)
 
     # ---- climbing
@@ -1109,6 +1149,17 @@ class Stickman:
             n = math.hypot(dx, dy) or 1.0
             hands[1] = Vec(dx / n * arm * 0.97, dy / n * arm * 0.97)
             self.facing = 1 if dx >= 0 else -1
+        elif self.gesture == "poke" and self.time < self.gesture_until:
+            # bent over something below / in front of him, jabbing at it with a finger
+            sh = self._shoulder_world()
+            px, py = getattr(self, "point_at", (sh.x + f * 100, sh.y + 100))
+            dx, dy = px - sh.x, py - sh.y
+            n = math.hypot(dx, dy) or 1.0
+            jab = 0.78 + 0.20 * abs(math.sin(t * 9.0))
+            hands[1] = Vec(dx / n * arm * jab, dy / n * arm * jab)
+            hands[0] = Vec(-f * 0.05 * h, arm * 0.85)
+            self.facing = 1 if dx >= 0 else -1
+            lean += f * 0.20
         elif self.gesture in PROPS and self.time < self.gesture_until:
             hands, d_lean = self._prop_hands(arm)
             lean += d_lean
@@ -1268,6 +1319,9 @@ class Stickman:
         # reeling / hanging: both hands up the rod toward the hook, body hanging below
         hand = to_hook * arm
         hands = [hand * 0.82 + Vec(0, 0.03 * h), hand]
+        if self.time < self.poke_until:  # one hand off the rod, jabbing the button
+            jab = 0.80 + 0.22 * abs(math.sin(self.time * 16.0))
+            hands = [hand * 0.80, to_hook * ((self.upper_arm + self.forearm) * jab) + Vec(self.facing * 0.06 * h, 0)]
         flutter = math.sin(self.time * 9.0)
         hip = Vec(0, -leg * 0.95)
         feet = [Vec(-f * 0.05 * h + 0.02 * h * flutter, 0.02 * h), Vec(f * 0.07 * h - 0.02 * h * flutter, -0.04 * h)]
@@ -1306,11 +1360,28 @@ class Stickman:
             feet = [Vec(f * (0.09 * h + 0.06 * h * s1), 0.36 * h - 0.03 * h * max(0.0, s1)),
                     Vec(f * (0.13 * h + 0.06 * h * s2), 0.34 * h - 0.03 * h * max(0.0, s2))]
             hands = [Vec(pos.x - f * 0.14 * h, ground) - sh, Vec(pos.x + f * 0.10 * h, ground) - sh]
-            return hip, f * 0.05 + 0.02 * math.sin(t * 0.7), feet, hands, rates
+            lean = f * 0.05 + 0.02 * math.sin(t * 0.7)
+            if self.cards:
+                hands, lean = self._card_hands(lean)
+                rates = (7.0, 5.0, 9.0, 14.0)
+            return hip, lean, feet, hands, rates
         hip = Vec(-f * 0.02 * h, -tuck - 0.02 * h + breathe)
         feet = [Vec(f * 0.27 * h, -tuck), Vec(f * 0.33 * h, -tuck)]
         hands = [Vec(pos.x - f * 0.16 * h, ground) - sh, Vec(pos.x - f * 0.09 * h, ground) - sh]
         return hip, -f * 0.16 + 0.02 * math.sin(t * 0.7), feet, hands, rates
+
+    def _card_hands(self, lean: float):
+        """Seated at the card table: a fan of cards held up in front of the chest; reaching out
+        to play one; both arms up after winning a round."""
+        h, f, t = self.h, self.facing, self.time
+        if t < self.cheer_until:
+            k = math.sin(t * 12.0)
+            return [Vec(-f * 0.10 * h, -0.30 * h + 0.03 * h * k), Vec(f * 0.12 * h, -0.31 * h - 0.03 * h * k)], lean - f * 0.08
+        hands = [Vec(f * 0.13 * h, 0.13 * h), Vec(f * 0.19 * h, 0.10 * h + 0.004 * h * math.sin(t * 1.7))]
+        if t < self.card_play_until:  # the near hand puts a card down on the table
+            hands[1] = Vec(f * 0.38 * h, 0.22 * h)
+            lean += f * 0.18
+        return hands, lean
 
     def _climb_pose(self):
         h, f, leg, st, w = self.h, self.facing, self.leg, self.state, self.wall

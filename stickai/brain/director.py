@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("stickai.director")
 
 STOP_WORDS = ("stop", "enough", "quit", "стоп", "хватит", "остановись", "dosť", "prestaň", "stoj")
-ACTIONS = ("none", "wave", "jump", "run", "sit", "approach", "leave", "music", "watch", "remove_couch", "fight")
+ACTIONS = ("none", "wave", "jump", "run", "sit", "approach", "leave", "music", "watch", "remove_couch", "fight", "cards")
 MAX_IMAGE_SIDE = 1024
 # A message that mentions the clipboard (only then is it read, and only with the setting on).
 CLIPBOARD_WORDS = re.compile(
@@ -166,6 +166,7 @@ class Director(QObject):
             self.app.tasks.cancel()  # games and plans stop at once; they still get to answer below
             self.app.music.stop()
             self.app.couch.end()
+            self.app.cards.end()
             self._fight_stopped = self.app.fight.stop()
         keys, group = self.mentioned(text)
         targets = list(self.roster.characters) if group and not keys else keys
@@ -572,7 +573,9 @@ Rules:
   play or control videos or windows for them,
   "remove_couch" when the user asks to remove / put away the couch or to stop sitting on it,
   "fight" ONLY when the user asks them to fight / have a brawl (set "to" to the opponent's key, or
-  "everyone"): they gather on the floor and fight for real with punches, kicks and blocks, else "none".
+  "everyone"): they gather on the floor and fight for real with punches, kicks and blocks,
+  "cards" when the user asks them to play cards: everyone sits down at a card table (they also do this
+  on their own when the user is away for a while), else "none".
 - A character marked "just arrived" was summoned by this very message.{self._arrival_rule()}{self._capability_rules()}
 - Output JSON only."""
 

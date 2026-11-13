@@ -2,7 +2,7 @@
   "name": "stickai",
   "displayName": "StickAI",
   "description": "Your desktop stickmen help with code: explain it, comment it, explain errors and answer questions in a side panel.",
-  "version": "0.2.0",
+  "version": "0.3.4",
   "publisher": "stickai",
   "license": "MIT",
   "engines": {
@@ -21,6 +21,12 @@
   "contributes": {
     "commands": [
       {
+        "command": "stickai.run",
+        "title": "%cmd.run%",
+        "category": "StickAI",
+        "icon": "$(play-circle)"
+      },
+      {
         "command": "stickai.explain",
         "title": "%cmd.explain%",
         "category": "StickAI"
@@ -33,6 +39,26 @@
       {
         "command": "stickai.diagnose",
         "title": "%cmd.diagnose%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.review",
+        "title": "%cmd.review%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.explainRun",
+        "title": "%cmd.explainRun%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.quiz",
+        "title": "%cmd.quiz%",
+        "category": "StickAI"
+      },
+      {
+        "command": "stickai.hint",
+        "title": "%cmd.hint%",
         "category": "StickAI"
       },
       {
@@ -65,10 +91,34 @@
       {
         "command": "stickai.ask",
         "key": "ctrl+alt+q"
+      },
+      {
+        "command": "stickai.hint",
+        "key": "ctrl+alt+h",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "stickai.review",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "stickai.explainRun",
+        "key": "ctrl+alt+t",
+        "when": "editorTextFocus || terminalFocus"
+      },
+      {
+        "command": "stickai.run",
+        "key": "ctrl+alt+enter",
+        "when": "editorTextFocus"
       }
     ],
     "menus": {
       "editor/context": [
+        {
+          "command": "stickai.run",
+          "group": "1_stickai@0"
+        },
         {
           "command": "stickai.explain",
           "group": "1_stickai@1"
@@ -85,6 +135,35 @@
         {
           "command": "stickai.ask",
           "group": "1_stickai@4"
+        },
+        {
+          "command": "stickai.hint",
+          "group": "1_stickai@5"
+        },
+        {
+          "command": "stickai.quiz",
+          "group": "1_stickai@6"
+        },
+        {
+          "command": "stickai.review",
+          "group": "1_stickai@7"
+        },
+        {
+          "command": "stickai.explainRun",
+          "group": "1_stickai@8"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "stickai.explainRun",
+          "group": "1_stickai"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "stickai.run",
+          "group": "navigation",
+          "when": "resourceExtname =~ /\\.(c|cpp|cc|py|js)$/"
         }
       ]
     }

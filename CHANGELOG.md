@@ -2,11 +2,25 @@
 
 ## Unreleased
 
+- VS Code panel: **/help** (also "что ты умеешь", "список команд") lists everything locally; slash commands
+  /explain /comment /hint /quiz /review /run /terminal /error work in the question box.
+- **Run with StickAI** (Ctrl+Alt+Enter / ▶): builds and runs C, C++, Python and JS in its own terminal (input
+  works); errors are caught even without the terminal's shell integration. Failed tasks are caught too.
+- The extension tells StickAI its version; an outdated one (VS Code not reloaded) gets a reminder from the coder.
 - The log is always written to %LOCALAPPDATA%\StickAI\stickai.log (it wasn't when started from StickAI.exe).
+- New panel / tab icon: a stickman with a laptop.
+- Fixed: the VS Code panel stayed empty on a new request (it removed its own hint line, then crashed on it).
+- **"What went wrong in the terminal?"** (Ctrl+Alt+T, terminal right-click, or «что в терминале?» in the chat).
 - Speech bubbles glide after a moving stickman (no more jumps in steps while he walks and thinks); at rest
   they stay still.
 - Speech bubbles appear already in place (no jump on the first frame or when the text replaces the dots);
   a character stops at once when he starts talking.
+- **Code coach (VS Code extension 0.3):**
+  - test runs in VS Code's terminal: cheering when they pass, a facepalm when they fail;
+  - a failed command: a one-line hint in a bubble, and a click opens the line;
+  - "you seem stuck" after 3 failures of the same command;
+  - after you save: a quick look at the changed lines, speaking only when needed;
+  - hints in 3 levels (Ctrl+Alt+H), a quiz on your own code, and a review by the four characters (Ctrl+Alt+R).
 - **Readable speech bubbles:** white with dark text, a border in the character's colour and a shadow; the bubble
   no longer follows idle swaying, and a talking character stands still.
 - **Arrivals:** a summoned character drops from the top, walks or runs in from a side, or jumps up out of the taskbar.

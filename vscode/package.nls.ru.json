@@ -4,5 +4,10 @@
   "cmd.diagnose": "Что за ошибка? (StickAI)",
   "cmd.ask": "Спросить StickAI про код",
   "cmd.showPanel": "Показать панель StickAI",
-  "cmd.reconnect": "Переподключиться к StickAI"
+  "cmd.reconnect": "Переподключиться к StickAI",
+  "cmd.hint": "Подсказка, а не ответ (StickAI)",
+  "cmd.quiz": "Проверь, понимаю ли я код (StickAI)",
+  "cmd.review": "Ревью от четверых (StickAI)",
+  "cmd.explainRun": "Что не так в терминале? (StickAI)",
+  "cmd.run": "Запустить со StickAI (Жёлтый следит за ошибками)"
 }

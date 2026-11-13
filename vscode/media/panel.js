@@ -95,8 +95,12 @@
     if (force || t.scrollHeight - t.scrollTop - t.clientHeight < 80) t.scrollTop = t.scrollHeight;
   }
   function begin(m) {
-    if (m.fresh) { $('thread').innerHTML = ''; secs.clear(); }
-    $('hint').hidden = true;
+    if (m.fresh) {  // a new topic: drop the old answers (but keep the hint line element)
+      for (const s of secs.values()) s.el.remove();
+      secs.clear();
+    }
+    const hint = $('hint');
+    if (hint) hint.hidden = true;
     const box = el('div', 'sec');
     box.dataset.id = m.id;
     if (m.kind === 'ask') {

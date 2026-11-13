@@ -51,6 +51,6 @@ textarea { flex: 1; resize: none; box-sizing: border-box; height: 32px; min-heig
            border: 1px solid var(--vscode-input-border, #8884); border-radius: 4px; outline: none; }
 textarea:focus { border-color: var(--vscode-focusBorder); }
 .busy .screen { animation: glow 1.2s ease-in-out infinite; }
-@keyframes glow { 50% { fill: #fff; } }
+@keyframes glow { 50% { stroke: #ffffff; } }
 [hidden] { display: none !important; }
 footer button { box-sizing: border-box; height: 32px; padding: 0 14px; flex: none; }

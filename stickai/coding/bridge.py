@@ -41,6 +41,7 @@ class Client:
         self.context: dict = {}    # what's open / selected in that VS Code window
         self.focused_at = 0.0      # time.monotonic() when that window last had focus
         self.workspace = ""
+        self.version = ""          # the extension's version ("" = older than 0.3.2, which didn't say)
 
 
 class Bridge(QObject):
@@ -156,6 +157,7 @@ class Bridge(QObject):
             if kind == "hello" and secrets.compare_digest(str(msg.get("token", "")), self.token):
                 c.ok = True
                 c.workspace = str(msg.get("workspace", ""))[:200]
+                c.version = str(msg.get("version", ""))[:20]
                 c.focused_at = time.monotonic() if msg.get("focused") else 0.0
                 self.send(c, {"type": "welcome", "protocol": PROTOCOL, **self.welcome})
                 log.info("VS Code window connected (%s)", c.workspace or "no folder")

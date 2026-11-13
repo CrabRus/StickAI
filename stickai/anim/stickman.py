@@ -1101,6 +1101,10 @@ class Stickman:
         elif self.gesture in PROPS and self.time < self.gesture_until:
             hands, d_lean = self._prop_hands(arm)
             lean += d_lean
+        elif self.gesture == "facepalm" and self.time < self.gesture_until:
+            # tests failed: hand on the forehead, head down, the other arm hanging
+            hands = [Vec(-f * 0.02 * h, arm * 0.92), Vec(f * 0.07 * h, -0.20 * h)]
+            lean += f * 0.22
         elif self.gesture == "type" and self.time < self.gesture_until:
             # bent over, hammering the field with both fists ("typing")
             k = math.sin(t * 24.0)

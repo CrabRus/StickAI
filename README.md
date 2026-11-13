@@ -124,6 +124,8 @@ To start over, quit the app and delete `memory/`.
   message, select all.
 - **Notifications:** while the chat window is closed, their lines and task results pop up in a corner.
   Settings: on / off, sound, which corner. Click one to open the chat.
+  "...but not while I'm coding" mutes them while VS Code is the window in front. "Bubbles stay" sets how long
+  speech bubbles stay (x0.5 .. x3).
 
 ### Settings window (⚙ in the chat window, or tray → Settings)
 
@@ -419,7 +421,36 @@ python vscode/build.py --install
 | **Comment** | **Ctrl+Alt+C** | "add comments" / «прокомментируй функцию» |
 | **What's this error?** | the light bulb on an error, or right-click | "what's this error" / «что за ошибка?» |
 
-All four commands are also in the editor's right-click menu.
+| **Hint, not the answer** | **Ctrl+Alt+H** (again on the same code: a more concrete hint, up to 3/3) | |
+| **Quiz me** | right-click → "Quiz me on this code" (answer in the panel's box) | |
+| **Review by the four** | **Ctrl+Alt+R**: Blue (edge cases), Red (speed), Green (names, with a joke), Yellow (the big picture) each say one line in a bubble; click a bubble to jump to its line | |
+
+| **Run with StickAI** | **Ctrl+Alt+Enter**, the ▶ button in the editor's title bar, or right-click | builds and runs the current file (C / C++ with gcc / g++, Python, JS) in its own terminal: you can type the program's input, and any error is caught and explained |
+| **What went wrong in the terminal?** | **Ctrl+Alt+T** (in the editor or the terminal), right-click in the terminal; chat: «что в терминале?» | the last failed command, its output and the code it points at, explained in the panel |
+
+All commands are also in the editor's right-click menu, and in the panel's box as **slash commands**:
+`/explain`, `/comment`, `/hint`, `/quiz`, `/review`, `/run`, `/terminal`, `/error`. **`/help`**, or asking "what can
+you do / list your commands", shows the full list right away, without an AI request.
+
+**Without asking**, the code helper also watches what you do in VS Code:
+- **Errors are caught** from "Run with StickAI", from a failed **task** (e.g. "C/C++: gcc build active file", whose
+  errors come from the Problems list), and from commands in VS Code's terminal. The last one needs the terminal's
+  *shell integration*; with PowerShell, that only works when scripts may run
+  (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, which is your call).
+- When StickAI notices VS Code still runs an older version of the extension (after an update), the coder asks
+  you to run "Developer: Reload Window".
+- **Tests** (pytest, unittest, jest, cargo test, ctest…) run in VS Code's terminal: everyone cheers when they
+  pass, and the coder facepalms when they fail.
+- **A command fails:** the coder says in a bubble what went wrong and how to fix it, and a click opens the file
+  at the line. The error is found in Python tracebacks, gcc / clang / MSVC errors and node stacks, skipping
+  library files. The same error isn't explained twice within 2 minutes.
+- **Stuck:** after the same command fails 3 times in 10 minutes, he offers a proper look in the panel instead
+  of another one-liner.
+- **After you save:** a glance at the changed lines (with the editor's errors). He speaks only if something is
+  clearly wrong, with one sentence and the line, at most every 2 minutes.
+- Settings → "react to what I run in its terminal" and "after I save, glance at the changed lines" turn these off.
+- **Bubbles** are now white with dark text and a border in the character's colour, so they read on any
+  wallpaper. A character who is talking stands still, so the text stays put.
 
 * **Nothing selected:** the function or class under the cursor is used, otherwise the whole file.
 * **Ask** continues a thread about the code you explained or selected, and remembers the last few answers.

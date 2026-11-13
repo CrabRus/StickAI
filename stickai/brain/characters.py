@@ -84,9 +84,12 @@ class Settings:
     notify: bool = True          # while the chat is closed, their lines pop up in a corner
     notify_sound: bool = False   # ...with the Windows notification sound
     notify_corner: str = "bottom-right"
+    quiet_coding: bool = True    # no pop-up notifications while VS Code is the window in front
     bubble_time: float = 1.0     # how long speech bubbles stay up (x reading time)
     vscode: bool = True          # link with the StickAI extension for VS Code (code explanations)
     coder: str = "yellow"        # the character who helps with code
+    code_watch: bool = True      # react to commands run in VS Code's terminal (explain errors, cheer for tests)
+    save_hints: bool = True      # after you save, a quick look at the changed lines (one line, only if needed)
 
 
 @dataclass(frozen=True)
@@ -190,9 +193,12 @@ def load_roster(path: Path) -> Roster:
         notify=bool(s.get("notify", d.notify)),
         notify_sound=bool(s.get("notify_sound", d.notify_sound)),
         notify_corner=_choice(s.get("notify_corner", d.notify_corner), NOTIFY_CORNERS, "notify_corner"),
+        quiet_coding=bool(s.get("quiet_coding", d.quiet_coding)),
         bubble_time=float(_clamp(s.get("bubble_time", d.bubble_time), 0.5, 3.0, "bubble_time")),
         vscode=bool(s.get("vscode", d.vscode)),
         coder=str(s.get("coder", d.coder)).strip().lower() or d.coder,
+        code_watch=bool(s.get("code_watch", d.code_watch)),
+        save_hints=bool(s.get("save_hints", d.save_hints)),
     )
 
     chars: dict[str, CharacterSpec] = {}
@@ -367,6 +373,8 @@ def save_roster(path: Path, roster: Roster) -> None:
         f"notify = {str(s.notify).lower()}",
         f"notify_sound = {str(s.notify_sound).lower()}",
         f"notify_corner = {_str(s.notify_corner)}",
+        "# ...but not while you're coding (VS Code is the window in front).",
+        f"quiet_coding = {str(s.quiet_coding).lower()}",
         "# How long speech bubbles stay above their heads: 1.0 = reading time, 2.0 = twice as long (0.5 .. 3).",
         f"bubble_time = {s.bubble_time:g}",
         "",
@@ -374,6 +382,12 @@ def save_roster(path: Path, roster: Roster) -> None:
         "# about is sent to Gemini only when you ask; `coder` is the character who explains it.",
         f"vscode = {str(s.vscode).lower()}",
         f"coder = {_str(s.coder)}",
+        "# React to what you run in VS Code's terminal: cheer when tests pass; when something fails,",
+        "# the error output (last lines) and the code around it are sent to Gemini for a one-line hint.",
+        f"code_watch = {str(s.code_watch).lower()}",
+        "# After you save a file in VS Code: the changed lines are sent to Gemini (at most every 2 minutes)",
+        "# and the coder says one line only if something is clearly wrong.",
+        f"save_hints = {str(s.save_hints).lower()}",
         "",
         "# Keep the chat window above other windows.",
         f"chat_on_top = {str(s.chat_on_top).lower()}",

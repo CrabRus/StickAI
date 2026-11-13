@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const cp = require('child_process');
 
 const RETRY_MS = 4000;
 const MAX_LINES = 800;
@@ -29,7 +30,62 @@ const T = {
   openFile: RU ? 'StickAI: открой файл и выдели код.' : 'StickAI: open a file and select some code first.',
   whatError: RU ? 'StickAI: что за ошибка?' : "StickAI: What's this error?",
   disconnected: RU ? 'StickAI не запущен (нажми, чтобы переподключиться)' : 'StickAI is not running (click to retry)',
+  reviewing: RU ? 'Стикмены смотрят код…' : 'The stickmen are reviewing…',
+  noRun: RU ? 'StickAI: в терминале VS Code пока ничего не падало, и ошибок в файле нет.' : "StickAI: nothing has failed in VS Code's terminal yet, and the file has no errors.",
+  cantRun: RU ? 'StickAI умеет запускать .c, .cpp, .py и .js.' : 'StickAI can run .c, .cpp, .py and .js files.',
+  whyFailed: RU ? 'Почему упала команда' : 'Why did this fail:',
 };
+const HELP_RU = [
+  '## Что я умею',
+  '',
+  '**Команды**: пиши в поле внизу или жми клавиши. Код — выделенный, или функция под курсором, или весь файл.',
+  '',
+  '- `/explain` — объяснить код · **Ctrl+Alt+E**',
+  '- `/comment` — прокомментировать: покажу изменения, примешь кнопкой · **Ctrl+Alt+C**',
+  '- `/hint` — подсказка, а не ответ: 1/3 → 2/3 → 3/3 при повторе · **Ctrl+Alt+H**',
+  '- `/quiz` — 3 вопроса, понимаешь ли ты свой код (ответь здесь же)',
+  '- `/review` — ревью от четверых: Синий, Красный, Зелёный, Жёлтый · **Ctrl+Alt+R**',
+  '- `/run` — собрать и запустить файл (C, C++, Python, JS), ввод с клавиатуры работает · **Ctrl+Alt+Enter** или ▶',
+  '- `/terminal` — что не так в терминале (последняя упавшая команда) · **Ctrl+Alt+T**',
+  '- `/error` — что за ошибка у курсора · или лампочка 💡',
+  '- `/help` — этот список',
+  '',
+  '**Просто вопрос** — пиши как обычно: «а почему тут цикл?», «как сделать быстрее?». Я отвечаю про выделенный код и помню прошлые ответы.',
+  '',
+  '**Сам, без просьбы:**',
+  '- что-то упало при запуске или сборке — подсказка в пузыре над стикменом, клик открывает строку;',
+  '- одно и то же упало 3 раза — предложу разобрать подробно;',
+  '- после сохранения гляну изменённые строки и скажу, только если есть реальная проблема;',
+  '- тесты прошли — все радуются, упали — я хватаюсь за лоб.',
+  '',
+  '**Из чата StickAI** (пока VS Code открыт): «объясни этот код», «прокомментируй функцию», «что за ошибка?», «что в терминале?».',
+].join('\n');
+const HELP_EN = [
+  '## What I can do',
+  '',
+  '**Commands**: type them in the box below or press the keys. The code is the selection, or the function under the cursor, or the whole file.',
+  '',
+  '- `/explain` — explain the code · **Ctrl+Alt+E**',
+  '- `/comment` — add comments: shown as a diff, you accept it · **Ctrl+Alt+C**',
+  '- `/hint` — a hint, not the answer: 1/3 → 2/3 → 3/3 when asked again · **Ctrl+Alt+H**',
+  '- `/quiz` — 3 questions to check you understand your code (answer here)',
+  '- `/review` — review by the four: Blue, Red, Green, Yellow · **Ctrl+Alt+R**',
+  '- `/run` — build and run the file (C, C++, Python, JS), typing input works · **Ctrl+Alt+Enter** or ▶',
+  '- `/terminal` — what went wrong in the terminal (the last failed command) · **Ctrl+Alt+T**',
+  '- `/error` — what is the error at the cursor · or the light bulb 💡',
+  '- `/help` — this list',
+  '',
+  '**Just ask** as usual: "why the loop here?", "how to make it faster?". I answer about the selected code and remember the last answers.',
+  '',
+  '**On my own:**',
+  '- something fails when you run or build: a hint in a bubble over the stickman, a click opens the line;',
+  '- the same thing fails 3 times: I offer a proper look;',
+  '- after you save I glance at the changed lines and speak only if something is really wrong;',
+  '- tests pass: everyone cheers; they fail: I facepalm.',
+  '',
+  '**From the StickAI chat** (while VS Code is open): "explain this code", "comment this function", "what is this error?", "what is in the terminal?".',
+].join('\n');
+
 const DEFAULT_LABELS = {
   title: '{name}: code', thinking: '{name} is reading the code…', explain_of: 'Explaining', comment_of: 'Comments for',
   error_of: 'Problem in', question: 'You', whole_file: 'whole file', lines: 'lines', stop: 'Stop',
@@ -41,6 +97,8 @@ const DEFAULT_LABELS = {
   no_errors: 'No errors or warnings near the cursor.', copy: 'Copy', copied: 'Copied',
   no_changes: 'Nothing to add: the code is already well commented.',
 };
+
+let EXT_VERSION = '';  // this extension's version (StickAI asks for a reload when a newer one is installed)
 
 function infoPath() {
   const base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
@@ -75,7 +133,7 @@ class Link {
     sock.setEncoding('utf8');
     sock.setNoDelay(true);
     sock.on('connect', () => {
-      this.write({ type: 'hello', token: info.token, protocol: 1,
+      this.write({ type: 'hello', token: info.token, protocol: 1, version: EXT_VERSION,
         workspace: vscode.workspace.name || '', focused: vscode.window.state.focused });
     });
     sock.on('data', (d) => {
@@ -203,12 +261,52 @@ async function pickCode(editor, wholeIfNone = true) {
   return wholeIfNone ? slice(doc, 0, doc.lineCount - 1) : null;
 }
 
+// ------------------------------------------------------------------ terminal runs
+// Shell integration (VS Code 1.93+) reports each command with its exit code and output.
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g;
+const MAX_RUN_OUTPUT = 60000;
+
+// Where an error points: the last frame in YOUR files (not the standard library / site-packages).
+function errorLocation(out, cwd) {
+  const found = [];
+  const add = (file, line) => {
+    if (!file || !line) return;
+    let p = file.trim();
+    if (!path.isAbsolute(p) && cwd) p = path.join(cwd, p);
+    if (/[\/](site-packages|dist-packages|node_modules|lib[\/]python\d|\.venv)[\/]/i.test(p)) return;
+    if (!fs.existsSync(p)) return;
+    found.push({ file: p, line: +line });
+  };
+  let m;
+  const py = /File "([^"]+)", line (\d+)/g;                                   // Python traceback
+  while ((m = py.exec(out))) add(m[1], m[2]);
+  const cc = /^((?:[A-Za-z]:)?[^\s:"'][^:\n"']*\.(?:c|h|cc|cpp|cxx|hpp|rs|go|java|cs|ts|tsx|js|mjs|py)):(\d+)(?::\d+)?:?\s*(?:fatal )?error/gim;
+  while ((m = cc.exec(out))) add(m[1], m[2]);                               // gcc / clang / tsc / rustc-ish
+  const msvc = /^((?:[A-Za-z]:)?[^\s(:][^(\n:]*\.(?:c|h|cpp|hpp|cs))\((\d+)\)\s*:\s*(?:fatal )?error/gim;
+  while ((m = msvc.exec(out))) add(m[1], m[2]);                             // MSVC
+  const js = /\(?((?:[A-Za-z]:)?[^\s():]+\.(?:js|mjs|cjs|ts)):(\d+):\d+\)?/g;
+  while ((m = js.exec(out))) add(m[1], m[2]);                               // node stack
+  return found.length ? found[found.length - 1] : null;
+}
+
+async function codeAround(file, line) {
+  try {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+    const a = Math.max(0, line - 1 - 12);
+    const b = Math.min(doc.lineCount - 1, line - 1 + 8);
+    return { start: a + 1, code: norm(doc.getText(new vscode.Range(a, 0, b, doc.lineAt(b).text.length))) };
+  } catch (e) {
+    return null;
+  }
+}
+
 function severityName(s) {
   return ['error', 'warning', 'info', 'hint'][s] || 'error';
 }
 
 // ------------------------------------------------------------------ activate
 function activate(context) {
+  EXT_VERSION = (context.extension && context.extension.packageJSON && context.extension.packageJSON.version) || '';
   let nextId = 1;
   const jobs = new Map();     // id -> { kind, uri, pick, answer, question, docVersion }
   let thread = [];            // [{ q, a }] questions and answers about the current topic
@@ -240,6 +338,7 @@ function activate(context) {
     panel = vscode.window.createWebviewPanel('stickai.panel', labels().labels.title,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [media] });
+    panel.iconPath = vscode.Uri.joinPath(media, 'icon.svg');  // the tab: a stickman with a laptop
     ready = false;
     queue = [];
     const w = panel.webview;
@@ -250,14 +349,15 @@ function activate(context) {
 <link rel="stylesheet" href="${w.asWebviewUri(vscode.Uri.joinPath(media, 'panel.css'))}">
 </head><body>
 <header>
-  <svg width="38" height="46" viewBox="0 0 38 46" aria-hidden="true">
-    <g stroke="var(--accent)" stroke-width="3.2" stroke-linecap="round" fill="none">
-      <circle cx="14" cy="8" r="6" fill="var(--accent)" stroke="none"/>
-      <path d="M14 14 L14 30 M14 30 L8 44 M14 30 L19 44 M14 18 L22 24 M14 19 L20 27"/>
+  <svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true">
+    <g fill="none" stroke="var(--accent)" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 17 Q17.5 24 16 30"/><path d="M16 30 Q13 36 10.5 44"/><path d="M16 30 Q19 37 22.5 43.5"/>
+      <path d="M17 20 Q21 25 26 26"/><path d="M17 21 Q22 23 28 21.5"/>
     </g>
-    <rect x="18" y="14" width="18" height="12" rx="1.5" transform="rotate(-8 27 20)" fill="#9aa0a6"/>
-    <rect class="screen" x="20" y="16" width="14" height="8" rx="1" transform="rotate(-8 27 20)" fill="#cfd3d7"/>
-    <rect x="15" y="26" width="20" height="2.6" rx="1" fill="#9aa0a6"/>
+    <circle cx="17" cy="10" r="6.6" fill="var(--accent)"/>
+    <path d="M22 27 L40.5 27" stroke="#8E949C" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M40.5 27 L44.5 12.5" stroke="#B9BEC5" stroke-width="3.4" stroke-linecap="round"/>
+    <path class="screen" d="M39 25.2 L42.6 13.6" stroke="#7FD0FF" stroke-width="1.4" stroke-linecap="round"/>
   </svg>
   <div class="grow"><div class="who" id="who">StickAI</div></div>
   <button id="stop" hidden>Stop</button>
@@ -334,7 +434,8 @@ function activate(context) {
     jobs.set(id, { kind, uri: editor ? editor.document.uri : (topic && topic.uri), pick, answer: '', running: true,
       question: (extra && extra.question) || '', docVersion: editor ? editor.document.version : 0 });
     ensurePanel(true);
-    const label = { explain: L.explain_of, comment: L.comment_of, diagnose: L.error_of, ask: '' }[kind];
+    const label = { explain: L.explain_of, comment: L.comment_of, diagnose: L.error_of, ask: '', quiz: L.quiz_of,
+      hint: String(L.hint_of || 'Hint {level}/3 for').split('{level}').join(String((extra && extra.level) || 1)) }[kind];
     post({ cmd: 'begin', id, kind, fresh, question: (extra && extra.question) || '',
       meta: pick && label ? `${label}: ${where(pick)}` : (pick && kind === 'ask' ? where(pick) : '') });
     link.send(Object.assign({ type: kind, id, speaker: speaker || '' }, pick || {}, extra || {}));
@@ -348,6 +449,40 @@ function activate(context) {
     const pick = await pickCode(editor);
     if (!pick.code.trim()) return failed(speaker, 'no_editor', labels().labels.empty);
     startJob('explain', editor, pick, speaker);
+  }
+
+  // study mode: a hint that gets more concrete each time you ask again about the same code
+  let lastHint = { key: '', level: 0 };
+  async function hint() {
+    const editor = editorNow();
+    if (!editor) return failed('', 'no_editor', T.openFile);
+    if (!link.ready) return notRunning();
+    const pick = await pickCode(editor);
+    if (!pick.code.trim()) return failed('', 'no_editor', labels().labels.empty);
+    const key = editor.document.uri.toString() + ':' + pick.start_line + '-' + pick.end_line;
+    const level = key === lastHint.key ? Math.min(3, lastHint.level + 1) : 1;
+    lastHint = { key, level };
+    startJob('hint', editor, pick, '', { level });
+  }
+
+  async function quiz() {
+    const editor = editorNow();
+    if (!editor) return failed('', 'no_editor', T.openFile);
+    if (!link.ready) return notRunning();
+    const pick = await pickCode(editor);
+    if (!pick.code.trim()) return failed('', 'no_editor', labels().labels.empty);
+    startJob('quiz', editor, pick, '');
+  }
+
+  // four stickmen, one line each, in bubbles on the desktop (click one: jump to its line)
+  async function review() {
+    const editor = editorNow();
+    if (!editor) return failed('', 'no_editor', T.openFile);
+    if (!link.ready) return notRunning();
+    const pick = await pickCode(editor);
+    if (!pick.code.trim()) return failed('', 'no_editor', labels().labels.empty);
+    link.send(Object.assign({ type: 'review', id: nextId++, path: editor.document.uri.fsPath }, pick));
+    vscode.window.setStatusBarMessage(`$(comment-discussion) ${T.reviewing}`, 4000);
   }
 
   async function comment(speaker) {
@@ -387,9 +522,28 @@ function activate(context) {
     startJob('diagnose', editor, pick, speaker, { diagnostics });
   }
 
+  // "/help" (or "what can you do") and slash commands typed in the panel's box: answered here, no AI
+  const SLASH = {
+    '/explain': () => explain(''), '/comment': () => comment(''), '/hint': () => hint(), '/quiz': () => quiz(),
+    '/review': () => review(), '/run': () => runFile(), '/terminal': () => explainRun(''),
+    '/error': () => diagnose(''), '/help': () => showHelp(),
+  };
+  const HELP_WORDS = /^(help|помощь|команды|справка|commands)\??$|спис\S*(?: \S+){0,3} команд|все (?:твои |свои )?команды|какие (?:у тебя )?команды|что ты умеешь|what can you do|your commands|list (?:of )?(?:all )?commands/i;
+  function showHelp() {
+    const id = nextId++;
+    ensurePanel(true);
+    post({ cmd: 'begin', id, kind: 'help', fresh: false, meta: '' });
+    post({ cmd: 'chunk', id, text: RU ? HELP_RU : HELP_EN });
+    post({ cmd: 'done', id });
+  }
+
   async function ask(question) {
     question = String(question || '').trim();
     if (!question) return;
+    const word = question.split(/\s+/)[0].toLowerCase();
+    if (SLASH[word]) return SLASH[word]();
+    if (word.startsWith('/')) return showHelp();  // an unknown /command: show what there is
+    if (HELP_WORDS.test(question)) return showHelp();
     if (!link.ready) return notRunning();
     const editor = editorNow();
     let pick = null;
@@ -466,8 +620,17 @@ function activate(context) {
   // ---------------- messages from StickAI
   function fromApp(msg) {
     if (msg.type === 'welcome') { refreshLabels(); showState(); sendContext(); return; }
+    if (msg.type === 'ask_about') {  // "you seem stuck": a proper look in the panel
+      ensurePanel(true);
+      ask(String(msg.text || ''));
+      return;
+    }
+    if (msg.type === 'goto') {  // a click on a stickman's hint: show me that line
+      if (msg.file) goto(vscode.Uri.file(msg.file), msg.line || 1);
+      return;
+    }
     if (msg.type === 'run') {
-      const run = { explain, comment, diagnose }[msg.action];
+      const run = { explain, comment, diagnose, terminal: explainRun }[msg.action];
       if (run) run(msg.speaker || '');
       else if (msg.action === 'ask') { ensurePanel(true); post({ cmd: 'focusAsk' }); }
       return;
@@ -544,6 +707,10 @@ function activate(context) {
       { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
     vscode.commands.registerCommand('stickai.explain', () => explain('')),
     vscode.commands.registerCommand('stickai.comment', () => comment('')),
+    vscode.commands.registerCommand('stickai.hint', () => hint()),
+    vscode.commands.registerCommand('stickai.explainRun', () => explainRun('')),
+    vscode.commands.registerCommand('stickai.quiz', () => quiz()),
+    vscode.commands.registerCommand('stickai.review', () => review()),
     vscode.commands.registerCommand('stickai.diagnose', (uri, range) => diagnose('', uri, range)),
     vscode.commands.registerCommand('stickai.ask', () => { ensurePanel(true); post({ cmd: 'focusAsk' });
       if (panel) panel.reveal(undefined, false); }),
@@ -552,9 +719,214 @@ function activate(context) {
     vscode.window.onDidChangeWindowState(contextSoon),
     vscode.window.onDidChangeActiveTextEditor(contextSoon),
     vscode.window.onDidChangeTextEditorSelection(contextSoon),
+    ...watchTerminal(),
+    ...watchSaves(),
+    ...watchTasks(),
+    vscode.commands.registerCommand('stickai.run', () => runFile()),
   );
   showState();
   link.connect();
+
+  // after a save: the changed lines (+ a few around them) for a quick look; StickAI decides if it says anything
+  function watchSaves() {
+    const SKIP = new Set(['plaintext', 'markdown', 'json', 'jsonc', 'log', 'ignore', 'git-commit', 'git-rebase',
+      'properties', 'ini', 'csv', 'xml', 'yaml', 'toml']);
+    const snaps = new Map();
+    const remember = (doc) => {
+      if (doc.uri.scheme === 'file' && doc.getText().length < 400000) snaps.set(doc.uri.toString(), norm(doc.getText()));
+    };
+    vscode.workspace.textDocuments.forEach(remember);
+    const opened = vscode.workspace.onDidOpenTextDocument(remember);
+    const closed = vscode.workspace.onDidCloseTextDocument((d) => snaps.delete(d.uri.toString()));
+    const saved = vscode.workspace.onDidSaveTextDocument((doc) => {
+      const old = snaps.get(doc.uri.toString());
+      remember(doc);
+      if (old === undefined || !link.ready || doc.uri.scheme !== 'file' || SKIP.has(doc.languageId)) return;
+      const a = old.split('\n');
+      const b = norm(doc.getText()).split('\n');
+      let top = 0;
+      while (top < a.length && top < b.length && a[top] === b[top]) top++;
+      if (top === a.length && top === b.length) return;  // saved without changes
+      let ea = a.length - 1, eb = b.length - 1;
+      while (ea >= top && eb >= top && a[ea] === b[eb]) { ea--; eb--; }
+      if (eb < top) return;  // only deletions: nothing new to look at
+      if (eb - top > 120) return;  // a big rewrite / paste: not a "glance"
+      const from = Math.max(0, top - 6), to = Math.min(b.length - 1, eb + 6);
+      const diagnostics = vscode.languages.getDiagnostics(doc.uri)
+        .filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning && d.range.start.line >= from && d.range.start.line <= to)
+        .slice(0, 6).map((d) => ({ line: d.range.start.line + 1, message: d.message }));
+      link.send({ type: 'saved', file: vscode.workspace.asRelativePath(doc.uri, false), path: doc.uri.fsPath,
+        language: doc.languageId, start_line: from + 1, changed_from: top + 1, changed_to: eb + 1,
+        code: b.slice(from, to + 1).join('\n'), diagnostics });
+    });
+    return [opened, closed, saved];
+  }
+
+  // the last command that failed in VS Code's terminal (kept for "explain the terminal error")
+  let lastFail = null;
+  async function explainRun(speaker) {
+    if (!link.ready) return notRunning();
+    if (!lastFail) {  // nothing failed yet: the errors VS Code underlines in this file, if any
+      const ed = editorNow();
+      const errs = ed ? vscode.languages.getDiagnostics(ed.document.uri)
+        .filter((d) => d.severity === vscode.DiagnosticSeverity.Error) : [];
+      if (errs.length) return diagnose(speaker, ed.document.uri, errs[0].range);
+      if (speaker) link.send({ type: 'run_failed', speaker, reason: 'no_run' });
+      else vscode.window.showInformationMessage(T.noRun);
+      return;
+    }
+    const f = lastFail;
+    const loc = f.location || {};
+    const pick = loc.code ? { code: loc.code, start_line: loc.start || 1, end_line: (loc.start || 1) + loc.code.split('\n').length - 1,
+      file: loc.name || path.basename(loc.file || ''), language: path.extname(loc.file || '').slice(1), whole: false,
+      before: '', after: '', truncated: false } : null;
+    const tail = String(f.output || '').trim().split('\n').slice(-30).join('\n');
+    const question = `${T.whyFailed} \`${f.command}\`\n\n\`\`\`\n${tail}\n\`\`\``;
+    thread = [];
+    topic = loc.file ? { uri: vscode.Uri.file(loc.file), pick } : topic;
+    startJob('ask', loc.file ? { document: { uri: vscode.Uri.file(loc.file), version: 0 } } : null, pick, speaker || '',
+      { question, history: [] });
+  }
+
+  // a failed task (e.g. "C/C++: gcc.exe build active file"): its errors come from the Problems list
+  function watchTasks() {
+    return [vscode.tasks.onDidEndTaskProcess(async (e) => {
+      if (!link.ready || !e.exitCode) return;
+      await new Promise((r) => setTimeout(r, 800));  // let the problem matcher fill the Problems list
+      const t = e.execution.task;
+      const ex = t.execution || {};
+      const line = ex.commandLine || [ex.command && (ex.command.value || ex.command), ...(ex.args || []).map((a) => a.value || a)]
+        .filter(Boolean).join(' ');
+      const errs = [];
+      for (const [uri, ds] of vscode.languages.getDiagnostics()) {
+        for (const d of ds) if (d.severity === vscode.DiagnosticSeverity.Error) errs.push({ uri, d });
+      }
+      const out = errs.slice(0, 8).map(({ uri, d }) =>
+        `${vscode.workspace.asRelativePath(uri, false)}:${d.range.start.line + 1}: error: ${d.message}`).join('\n')
+        || `the task "${t.name}" failed with exit code ${e.exitCode}`;
+      const msg = { type: 'run_end', command: `${t.name}${line ? ': ' + line : ''}`, exit_code: e.exitCode, output: out };
+      if (errs.length) {
+        const first = errs[0];
+        const around = await codeAround(first.uri.fsPath, first.d.range.start.line + 1);
+        msg.location = Object.assign({ file: first.uri.fsPath, line: first.d.range.start.line + 1,
+          name: vscode.workspace.asRelativePath(first.uri, false) }, around || {});
+      }
+      lastFail = msg;
+      link.send(msg);
+    })];
+  }
+
+  // "Run with StickAI": compile / run the current file in our own terminal. Works without the shell's
+  // integration (blocked when PowerShell may not run scripts), so the output is always seen; input works too.
+  async function runFile() {
+    const ed = editorNow();
+    if (!ed) return vscode.window.showInformationMessage(T.openFile);
+    const doc = ed.document;
+    if (doc.isDirty) await doc.save();
+    const file = doc.uri.fsPath, dir = path.dirname(file), ext = path.extname(file).toLowerCase();
+    const base = path.join(dir, path.basename(file, ext));
+    const exe = base + (process.platform === 'win32' ? '.exe' : '');
+    const plans = {
+      '.py': [['python', [file]]],
+      '.c': [['gcc', ['-g', '-Wall', file, '-o', exe]], [exe, []]],
+      '.cpp': [['g++', ['-g', '-Wall', file, '-o', exe]], [exe, []]],
+      '.cc': [['g++', ['-g', '-Wall', file, '-o', exe]], [exe, []]],
+      '.js': [['node', [file]]],
+    };
+    const steps = plans[ext];
+    if (!steps) return vscode.window.showInformationMessage(T.cantRun);
+    const write = new vscode.EventEmitter();
+    let child = null, output = '', line = '', done = false;
+    const show = (t) => write.fire(t.replace(/\r?\n/g, '\r\n'));
+    const pty = {
+      onDidWrite: write.event,
+      open: () => go(0),
+      close: () => { if (child) child.kill(); },
+      handleInput: (data) => {  // your typing (or a pasted / sent line) goes to the program's input
+        if (done || !child) return;
+        for (const ch of data) {
+          if (ch === '\r' || ch === '\n') { show('\n'); child.stdin.write(line + '\n'); output += line + '\n'; line = ''; }
+          else if (ch === '\x7f' || ch === '\b') { if (line) { line = line.slice(0, -1); write.fire('\b \b'); } }
+          else if (ch >= ' ') { line += ch; write.fire(ch); }
+        }
+      },
+    };
+    const finish = async (code, shown) => {
+      done = true;
+      show(`\n\x1b[90m— ${shown} → exit code ${code} —\x1b[0m\n`);
+      if (!link.ready) return;
+      const msg = { type: 'run_end', command: shown, exit_code: code, cwd: dir, output: output.slice(-4000) };
+      if (code) {
+        const loc = errorLocation(output, dir);
+        if (loc) {
+          const around = await codeAround(loc.file, loc.line);
+          msg.location = Object.assign({ file: loc.file, line: loc.line,
+            name: vscode.workspace.asRelativePath(loc.file, false) }, around || {});
+        }
+        lastFail = msg;
+      }
+      link.send(msg);
+    };
+    const go = (i) => {
+      const [cmd, args] = steps[i];
+      const shown = [path.basename(cmd), ...args.map((a) => (a.includes(dir) ? path.basename(a) : a))].join(' ');
+      show(`\x1b[33m> ${shown}\x1b[0m\n`);
+      try {
+        child = cp.spawn(cmd, args, { cwd: dir, windowsHide: true });
+      } catch (err) {
+        return finish(127, shown);
+      }
+      child.stdout.on('data', (d) => { const t = d.toString(); output += t; show(t); });
+      child.stderr.on('data', (d) => { const t = d.toString(); output += t; show(`\x1b[31m${t}\x1b[0m`); });
+      child.on('error', (err) => { output += String(err.message) + '\n'; show(`\x1b[31m${err.message}\x1b[0m\n`); });
+      child.on('close', (code) => {
+        child = null;
+        if (code === 0 && i + 1 < steps.length) return go(i + 1);  // built: now run it
+        finish(code === null ? 1 : code, shown);
+      });
+    };
+    const term = vscode.window.createTerminal({ name: `StickAI ▶ ${path.basename(file)}`, pty });
+    term.show();
+  }
+
+  function watchTerminal() {
+    if (!vscode.window.onDidStartTerminalShellExecution || !vscode.window.onDidEndTerminalShellExecution) return [];
+    const runs = new Map();
+    const start = vscode.window.onDidStartTerminalShellExecution(async (e) => {
+      const rec = { out: '' };
+      runs.set(e.execution, rec);
+      try {
+        for await (const d of e.execution.read()) {
+          rec.out += d;
+          if (rec.out.length > MAX_RUN_OUTPUT) rec.out = rec.out.slice(-MAX_RUN_OUTPUT / 2);
+        }
+      } catch (err) { /* the terminal went away */ }
+    });
+    const end = vscode.window.onDidEndTerminalShellExecution(async (e) => {
+      if (!link.ready) { runs.delete(e.execution); return; }
+      await new Promise((r) => setTimeout(r, 200));  // let the reader catch the last output
+      const rec = runs.get(e.execution);
+      runs.delete(e.execution);
+      const out = (rec ? rec.out : '').replace(ANSI, '').replace(/\r/g, '');
+      const command = (e.execution.commandLine && e.execution.commandLine.value) || '';
+      const cwdUri = e.execution.cwd || (e.shellIntegration && e.shellIntegration.cwd);
+      const cwd = cwdUri ? cwdUri.fsPath
+        : (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0].uri.fsPath) || '';
+      const msg = { type: 'run_end', command, exit_code: e.exitCode === undefined ? null : e.exitCode,
+        cwd, output: out.slice(-4000) };
+      if (e.exitCode) lastFail = msg;  // for "what's wrong in the terminal?"
+      if (e.exitCode) {
+        const loc = errorLocation(out, cwd);
+        if (loc) {
+          const around = await codeAround(loc.file, loc.line);
+          msg.location = Object.assign({ file: loc.file, line: loc.line,
+            name: vscode.workspace.asRelativePath(loc.file, false) }, around || {});
+        }
+      }
+      link.send(msg);
+    });
+    return [start, end];
+  }
 }
 
 function deactivate() {}

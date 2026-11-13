@@ -424,6 +424,8 @@ class StickApp:
         st = self.roster.settings
         if not st.notify or self.hidden or self.chat.isVisible():
             return
+        if st.quiet_coding and self.code.coding_now():
+            return  # coding in VS Code: no pop-ups (code hints still come as bubbles)
         if e.kind == "char":
             spec = self.roster.characters.get(e.speaker)
             name, color = (spec.display_name, spec.color) if spec else (e.speaker, "#888888")

@@ -4,5 +4,10 @@
   "cmd.diagnose": "What's this error? (StickAI)",
   "cmd.ask": "Ask StickAI about the code",
   "cmd.showPanel": "Show the StickAI panel",
-  "cmd.reconnect": "Reconnect to StickAI"
+  "cmd.reconnect": "Reconnect to StickAI",
+  "cmd.hint": "Hint, not the answer (StickAI)",
+  "cmd.quiz": "Quiz me on this code (StickAI)",
+  "cmd.review": "Review by the four (StickAI)",
+  "cmd.explainRun": "What went wrong in the terminal? (StickAI)",
+  "cmd.run": "Run with StickAI (watches for errors)"
 }

@@ -69,6 +69,11 @@ FIGHT_ASK = re.compile(r"(?<!\w)(?:дерит|подерит|подерис|де
                        r"bitk|pobi|bijte)", re.IGNORECASE)
 FIGHT_STOP = re.compile(r"(?:не|хватит|прекратите|прекрати|перестаньте|stop|no more|quit|prestaňte|dosť)\s+"
                         r"(?:\w+\s+)?(?:дерит|драть|драк|бить|fight|bit)", re.IGNORECASE)
+# Scrolling direction said in words ("кручу вверх"): small models often leave the field out (-> down)
+SCROLL_UP = re.compile(r"вверх|наверх|назад к|к началу|в начало|выше|(?<![a-z])up(?![a-z])|to the top|back to|"
+                       r"hore|nahor|vyššie", re.IGNORECASE)
+SCROLL_DOWN = re.compile(r"вниз|ниже|дальше|к концу|(?<![a-z])down(?![a-z])|further|to the bottom|dole|nižšie",
+                         re.IGNORECASE)
 NEW_WINDOW_WORDS = re.compile(r"new (browser |chrome |edge |firefox )?window|нов\w* окн|nov\w* okn", re.IGNORECASE)
 # Words that only call someone over. A message made of names + these is "just a summon"
 # (with greet_on_arrival off, nobody answers it).
@@ -850,6 +855,14 @@ Rules:
                     [r["task"]] if isinstance(r.get("task"), dict) else []
                 if steps and k in present:
                     entry = p.get("entry")
+                    for st in steps:  # trust the words over a missing / contradicting direction field
+                        if isinstance(st, dict) and st.get("kind") == "scroll_page":
+                            # what they said they'd do first ("кручу вверх"), then what you asked
+                            for said in (str(r.get("text", "")), entry.text if entry is not None else ""):
+                                up, down = bool(SCROLL_UP.search(said)), bool(SCROLL_DOWN.search(said))
+                                if up != down:
+                                    st["direction"] = "up" if up else "down"
+                                    break
                     if entry is not None and NEW_WINDOW_WORDS.search(entry.text or ""):
                         for st in steps:  # you said "new window": a page they open goes into one
                             if isinstance(st, dict) and st.get("kind") == "open_url":

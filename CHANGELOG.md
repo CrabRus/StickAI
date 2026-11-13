@@ -15,6 +15,10 @@
   they stay still.
 - Small screens (laptops): the chat, settings and reading windows are never bigger than the screen and are
   moved back inside it when opened (e.g. after being left somewhere on a bigger monitor).
+- **Reading window** (`show_text`, «выведи текст задания 6.1»): the exact text of a PDF / page / file, laid out,
+  jumping to the part asked for; Copy / Translate (Gemini, checked: retried if it comes back untranslated) /
+  Open the file. PDFs open in the browser are now read from the file (pypdf) instead of the screen.
+- Fixed: scrolling always went down (the direction now follows what was said: «кручу вверх»).
 - Speech bubbles appear already in place (no jump on the first frame or when the text replaces the dots);
   a character stops at once when he starts talking.
 - The chat window opens at the top right.

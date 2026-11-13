@@ -59,6 +59,14 @@ _TAB = r"(?:вкладк[уиа]|таб|tab|kartu)"
 QUICK_TAB_CLOSE = re.compile(rf"^(?:закрой|close|zatvor)\s+{_TAB}\s+(?:с\s+|with\s+)?(.+?){_P}$", re.I)
 QUICK_TAB_SWITCH = re.compile(rf"^(?:переключись|перейди|вернись|switch|go back|go|prepni)\s+(?:на|во?|to|na)\s+{_TAB}\s+(?:с\s+)?(.+?){_P}$", re.I)
 QUICK_TAB_LIST = re.compile(rf"^(?:какие|какие у меня|what|which|aké)\s+{_TAB.replace('[уиа]', 'и')}?\w*\s*(?:открыты|open|otvorené)?\??$", re.I)
+# "прочитай / выведи / покажи (мне) текст задания", "переведи задание 6.1", "read me this pdf"
+QUICK_SHOW = re.compile(r"^(?:прочитай|прочти|выведи|покажи|открой|read|show|print|prečítaj|ukáž|vypíš)\s+(?:мне\s+|me\s+)?"
+                        r"(?:весь\s+|полный\s+|the\s+(?:whole\s+|full\s+)?)?(?:текст|text)?\s*(?:этого\s+|этой\s+|this\s+)?"
+                        r"(?:задани\w*|задач\w*|документ\w*|pdf|пдф|файл\w*|страниц\w*|úloh\w*|zadani\w*|assignment|"
+                        r"task|document|file|page)\s*([\d.]*)\s*(?:текстом|целиком|in text)?[.!?]*$", re.I)
+QUICK_TRANSLATE = re.compile(r"^(?:переведи|translate|prelož)\s+(?:мне\s+|me\s+)?(?:это\s+|this\s+|the\s+)?"
+                             r"(?:задани\w*|задач\w*|документ\w*|pdf|пдф|текст|страниц\w*|úloh\w*|assignment|task|"
+                             r"document|text|page)?\s*([\d.]*)[.!?]*$", re.I)
 QUICK_READ = re.compile(r"^(?:прочитай|прочти|перескажи|о ч[её]м|кратко перескажи|summari[sz]e|read|what'?s on|zhrň|prečítaj)\s+"
                         r"(?:мне\s+)?(?:эт\w+\s+|this\s+|the\s+|túto\s+)?(?:страниц\w*|стать\w*|page|article|stránk\w*|článok)\??[.!]*$", re.I)
 
@@ -257,7 +265,15 @@ def clean_text(text: str) -> str:
 
 
 def read_page(hwnd: int) -> tuple[str, str, str]:
-    """(title, address, text) of the page shown in the window."""
+    """(title, address, text) of the page shown in the window. A PDF is read from the file itself."""
+    from ..tools import docread
+    address = page_address(hwnd)
+    local = docread.path_from_address(address)
+    if local and local.lower().endswith(".pdf"):
+        try:
+            return os.path.basename(local), address, clean_text(docread.read_file(local))
+        except docread.ReadError:
+            pass
     UIA, _auto = _uia()
     doc = _page_document(hwnd)
     if doc is None:
@@ -326,7 +342,7 @@ def _quick_join(fn, timeout: float = 2.5):
 # ---------------------------------------------------------------- the skill
 class BrowserSkill(Skill):
     name = "browser"
-    KINDS = ("youtube", "gmail", "maps", "browser_tabs", "read_page", "click_link")
+    KINDS = ("youtube", "gmail", "maps", "browser_tabs", "read_page", "click_link", "show_text")
 
     def actions(self, settings):
         acts = [
@@ -356,6 +372,14 @@ class BrowserSkill(Skill):
                     "match": Param("STRING", "browser_tabs: part of the tab's title, e.g. 'YouTube'")}),
             Action("click_link", "click a link or button ON the web page open in the browser, by its text",
                    {"link": Param("STRING", "click_link: the link's text as shown on the page")}),
+            Action("show_text", "show the user the EXACT text of the PDF / page open in the browser (or of a file) in "
+                                "a reading window, laid out, optionally translated. Use it whenever the user wants to "
+                                "read / see / print out / copy a document's text or a task from it - never "
+                                "retype it from a screenshot",
+                   {"path": Param("STRING", "show_text: a file path instead of the browser's page (optional)"),
+                    "part": Param("STRING", "show_text: jump to this part, e.g. '6.1' (optional)"),
+                    "translate": Param("BOOLEAN", "show_text: translate into the user's language")},
+                   ('"выведи мне текст задания 6.1" -> {"kind":"show_text","part":"6.1"}',)),
         ]
         if settings.read_pages:
             acts.append(Action("read_page", "read the text of the web page open in the browser (only when the user "
@@ -366,6 +390,46 @@ class BrowserSkill(Skill):
         return ("For Google services prefer youtube / gmail / maps over open_url (they open the right page "
                 "directly). Never send mail: compose only makes a draft. For browser_tabs list and read_page add "
                 "\"continue\": true and then tell the user what you found.")
+
+    # ------------------------------------------------------------------ show the text
+    def _show_text(self, runner, s, spec):
+        from ..tools.tasks import TaskFailed
+        from ..tools import docread
+        from ..ui.reader import ReaderWindow
+
+        def work():
+            if spec["path"]:
+                return os.path.basename(spec["path"]), spec["path"], docread.read_file(spec["path"]), True
+            hwnd = spec["hwnd"]
+            address = page_address(hwnd)
+            local = docread.path_from_address(address)
+            title = next((t["name"] for t in tabs(hwnd) if t["selected"]), "") or address
+            if local:
+                return os.path.basename(local), local, docread.read_file(local), True
+            if re.search(r"\.pdf(?:$|[?#])", address, re.I):
+                url = address if address.startswith("http") else "https://" + address
+                return title, "", docread.read_url_pdf(url), True
+            _t, _a, text = read_page(hwnd)
+            return title, "", text, False
+        box = background(work)
+        yield ("until", lambda: box.get("done", False), 20.0)
+        if box.get("error") is not None:
+            raise TaskFailed(tr("br.read_failed") + f": {box['error']}")
+        title, source, text, is_doc = box.get("value") or ("", "", "", False)
+        if not text.strip():
+            raise TaskFailed(tr("br.read_failed"))
+        md = docread.to_markdown(text, "") if is_doc else clean_text(text)
+        win = ReaderWindow(runner.app, title or tr("br.this_page"), md, source, spec["part"], spec["translate"])
+        win.open()
+        runner.app._reader = win  # keep it alive
+        s.jump()
+        spec["done"] = tr("br.shown_text", title=title[:60])
+        excerpt = md
+        if spec["part"]:
+            i = md.find(spec["part"])
+            excerpt = md[max(0, i - 100):] if i >= 0 else md
+        spec["report"] = ("opened a reading window with the exact text" +
+                          (f" (scrolled to {spec['part']})" if spec["part"] else "") + ". The text:\n" + excerpt[:3000])
 
     # ------------------------------------------------------------------ quick
     def quick(self, text, app):
@@ -411,6 +475,12 @@ class BrowserSkill(Skill):
             return [{"kind": "browser_tabs", "tabs": "list"}]
         if QUICK_READ.match(text) and app.roster.settings.read_pages and browser_windows():
             return [{"kind": "read_page"}]
+        m = QUICK_SHOW.match(text) or QUICK_TRANSLATE.match(text)
+        if m and browser_windows():
+            step = {"kind": "show_text", "part": (m.group(1) or "").strip(".")}
+            if QUICK_TRANSLATE.match(text):
+                step["translate"] = True
+            return [step]
         return None
 
     # ---------------------------------------------------------------- resolve
@@ -452,10 +522,21 @@ class BrowserSkill(Skill):
                 raise Unusable("maps needs query (a place) or to (a destination)")
             what = tr("br.route", to=dest, frm=origin or tr("br.here")) if dest else tr("br.map_find", query=query)
             return {**base, "url": maps_url(query, origin, dest, mode), "trusted": True, "what": what}
+        if kind == "show_text" and step.get("path"):
+            path = os.path.expandvars(str(step["path"]).strip().strip('"'))
+            if not os.path.isfile(path):
+                raise Unusable(f"no file {path!r}: give the full path (find it with find_path first)")
+            return {**base, "hwnd": None, "path": path, "part": str(step.get("part") or ""),
+                    "translate": bool(step.get("translate")), "trusted": True,
+                    "what": tr("br.show_text", title=os.path.basename(path))}
         wins = browser_windows()
         if not wins:
             raise Unusable("no browser window is open (open one with open_url)")
         hwnd = wins[0]
+        if kind == "show_text":
+            return {**base, "hwnd": hwnd, "path": "", "part": str(step.get("part") or "").strip("."),
+                    "translate": bool(step.get("translate")), "trusted": True,
+                    "what": tr("br.show_text", title=tr("br.this_page"))}
         if kind == "read_page":
             if not s.read_pages:
                 raise Unusable("reading pages is turned off in Settings")
@@ -509,6 +590,9 @@ class BrowserSkill(Skill):
             except OSError as e:
                 raise TaskFailed(str(e))
             yield ("wait", 1.0)
+            return
+        if kind == "show_text":
+            yield from self._show_text(runner, s, spec)
             return
         hwnd = spec["hwnd"]
         if not control.exists(hwnd):

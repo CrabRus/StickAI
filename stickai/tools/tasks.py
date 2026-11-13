@@ -71,7 +71,7 @@ MAX_STEPS = 6
 # after these the screen is different: they get one look at the result, to finish the job or fix it
 # What they hold while a skill step runs (see Stickman.PROPS): the work shows in the animation.
 STEP_PROPS = {"terminal": "laptop", "open_in_vscode": "laptop",
-              "find_path": "magnifier", "read_page": "magnifier", "click_link": "remote",
+              "find_path": "magnifier", "read_page": "magnifier", "show_text": "magnifier", "click_link": "remote",
               "manage_files": "box", "rename_path": "box", "create_files": "box", "undo_files": "box",
               "gmail": "letter", "maps": "map", "youtube": "remote", "media": "remote", "browser_tabs": "remote"}
 LOOK_AFTER = ("open_url", "launch_app", "press_keys", "type_text", "click_button", "click_at", "scroll_page",

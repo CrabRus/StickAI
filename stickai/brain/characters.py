@@ -84,6 +84,7 @@ class Settings:
     notify: bool = True          # while the chat is closed, their lines pop up in a corner
     notify_sound: bool = False   # ...with the Windows notification sound
     notify_corner: str = "bottom-right"
+    bubble_time: float = 1.0     # how long speech bubbles stay up (x reading time)
     vscode: bool = True          # link with the StickAI extension for VS Code (code explanations)
     coder: str = "yellow"        # the character who helps with code
 
@@ -189,6 +190,7 @@ def load_roster(path: Path) -> Roster:
         notify=bool(s.get("notify", d.notify)),
         notify_sound=bool(s.get("notify_sound", d.notify_sound)),
         notify_corner=_choice(s.get("notify_corner", d.notify_corner), NOTIFY_CORNERS, "notify_corner"),
+        bubble_time=float(_clamp(s.get("bubble_time", d.bubble_time), 0.5, 3.0, "bubble_time")),
         vscode=bool(s.get("vscode", d.vscode)),
         coder=str(s.get("coder", d.coder)).strip().lower() or d.coder,
     )
@@ -365,6 +367,8 @@ def save_roster(path: Path, roster: Roster) -> None:
         f"notify = {str(s.notify).lower()}",
         f"notify_sound = {str(s.notify_sound).lower()}",
         f"notify_corner = {_str(s.notify_corner)}",
+        "# How long speech bubbles stay above their heads: 1.0 = reading time, 2.0 = twice as long (0.5 .. 3).",
+        f"bubble_time = {s.bubble_time:g}",
         "",
         "# Code helper in VS Code (install the extension from the vscode/ folder). Code you ask",
         "# about is sent to Gemini only when you ask; `coder` is the character who explains it.",

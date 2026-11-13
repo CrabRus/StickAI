@@ -3,6 +3,12 @@
 ## Unreleased
 
 - The log is always written to %LOCALAPPDATA%\StickAI\stickai.log (it wasn't when started from StickAI.exe).
+- Speech bubbles glide after a moving stickman (no more jumps in steps while he walks and thinks); at rest
+  they stay still.
+- Speech bubbles appear already in place (no jump on the first frame or when the text replaces the dots);
+  a character stops at once when he starts talking.
+- **Readable speech bubbles:** white with dark text, a border in the character's colour and a shadow; the bubble
+  no longer follows idle swaying, and a talking character stands still.
 - **Arrivals:** a summoned character drops from the top, walks or runs in from a side, or jumps up out of the taskbar.
 - **Chat:**
   - select and copy messages (right-click menu);

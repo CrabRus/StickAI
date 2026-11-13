@@ -122,6 +122,7 @@ class Stickman:
         self.leaving = False       # jumping off the top of the screen for good
         self.target_x: float | None = None  # walking over to someone
         self.target_until = 0.0
+        self.talking_until = 0.0   # while he talks he stays put (no wandering, hops or climbs)
         # fighting (driven by activities/fight.py): a stance + one move at a time
         self.fighting = False      # in a fight: fists up, no wandering off on his own
         self.fight_move = ""       # punch | kick | block | hit | jump_kick | ""
@@ -267,10 +268,13 @@ class Stickman:
     # ------------------------------------------------------- brain actions
     def talk(self, seconds: float) -> None:
         """Stand still while speaking (only interrupts walking; sitters stay seated)."""
+        self.talking_until = max(self.talking_until, self.time + seconds)
         if self.state == State.IDLE:
             self.idle_for = max(self.idle_for, self.state_time + seconds)
+            self.speed = 0.0  # no sliding to a halt under the speech bubble
         elif self.state == State.WALKING and self.target_x is None:
             self.running = False
+            self.speed = 0.0
             self.idle_for = seconds
             self.set_state(State.IDLE)
         elif self.state == State.SITTING:
@@ -642,6 +646,10 @@ class Stickman:
             elif self.fighting:  # the fight decides where to go: wait for orders
                 self.idle_for = 1e9
                 self.set_state(State.IDLE)
+            elif self.time < self.talking_until:  # talking: stand still so the speech bubble stays readable
+                self.idle_for = self.talking_until - self.time + 0.2
+                self.state_time = 0.0
+                self.state = State.IDLE
             else:
                 # spontaneous behaviour, flavoured by personality
                 lazy = max(0.0, 2.0 - self.energy)
@@ -667,7 +675,7 @@ class Stickman:
             if self.state_time > 0.45:
                 self.set_state(State.WALKING)
 
-        if self.state == State.WALKING and self.target_x is None and not self.fighting:
+        if self.state == State.WALKING and self.target_x is None and not self.fighting                 and self.time >= self.talking_until:
             wall = self._find_wall(scene)
             if wall is not None:
                 if random.random() < self.climb_chance:

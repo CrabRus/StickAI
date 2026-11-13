@@ -28,6 +28,7 @@ from .desktop import win32
 from .desktop.scene import DesktopScene
 from .desktop.win32 import Rect
 from .overlay import HUD_LOGICAL, OverlayWindow
+from .ui import bubble as bubble_mod
 from .ui.bubble import SpeechBubble, reading_time
 from .brain.memory import MemoryStore
 from .ui.chatwindow import ChatWindow
@@ -131,6 +132,7 @@ class StickApp:
         self.chat = ChatWindow(self)
         self.chat.apply_on_top(self.roster.settings.chat_on_top)
         self._apply_spellcheck()
+        bubble_mod.TIME_FACTOR = self.roster.settings.bubble_time
         for e in self.memory.entries[-80:]:  # older history stays on disk
             self.chat.add_entry(e, follow=False)
         self.chat.set_present([])
@@ -506,7 +508,8 @@ class StickApp:
             return "standing on top of an open window"
         return "on the desktop"
 
-    def say(self, key: str, text: str, action: str = "none", to: str = "user", force_bubble: bool = False) -> None:
+    def say(self, key: str, text: str, action: str = "none", to: str = "user", force_bubble: bool = False,
+            on_click=None) -> None:
         """Show a line above a character. force_bubble: a full bubble whatever the bubble
         setting (reminders and tool results you need to read right there)."""
         s = self.world.get(key)
@@ -517,11 +520,12 @@ class StickApp:
             b = self.bubbles.get(key)
             if b is None:
                 b = self.bubbles[key] = SpeechBubble(s.color)
+            b.on_click = on_click
             if mode == "full":
                 b.say(text)
             else:  # just a sign that they said something: ? for questions, ! otherwise
                 b.indicate("?" if text.rstrip().endswith("?") else "!")
-        s.talk(reading_time(text) * 0.8)
+        s.talk(reading_time(text) + 0.3)  # stands still as long as the bubble is up
         other = self.world.get(to)
         if other is not None and other is not s:
             s.face_toward(other.pos.x)   # look at who you're talking to...
@@ -629,6 +633,7 @@ class StickApp:
             self._build_tray_menu()
         self._update_present()
         self._apply_spellcheck()
+        bubble_mod.TIME_FACTOR = new.bubble_time
         if (new.vscode, new.coder, new.language) != (old.vscode, old.coder, old.language):
             self.code.apply_settings()
         if [(k, c.display_name, c.color) for k, c in new_chars.items()] != \
